@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# OneShot 本地工件（PB 二进制、数据、编译产物）
+tools/
+.oneshot/
+examples/*/pb_hooks/
+examples/*/.env
+
+# 生成产物默认会写到 web/src/api、mobile/lib/api，是否入库由团队决定
+.DS_Store

@@ -1,0 +1,25 @@
+{
+  "name": "@oneshot/core",
+  "version": "0.1.0",
+  "description": "OneShot core: service manifest DSL, PocketBase provisioner, hooks compiler, client codegen",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^24.0.0"
+  }
+}

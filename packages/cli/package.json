@@ -1,0 +1,22 @@
+{
+  "name": "oneshot",
+  "version": "0.1.0",
+  "description": "OneShot CLI — 基于 PocketBase 的自托管服务发布/生成框架",
+  "type": "module",
+  "bin": {
+    "oneshot": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@oneshot/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^24.0.0",
+    "@oneshot/console": "workspace:*"
+  }
+}

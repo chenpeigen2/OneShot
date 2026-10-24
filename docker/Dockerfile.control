@@ -1,0 +1,16 @@
+# OneShot 控制面：构建 monorepo，启动时发布项目并常驻只读控制台
+FROM node:24-alpine AS build
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages ./packages
+RUN pnpm install --no-frozen-lockfile \
+ && pnpm -r build
+
+FROM node:24-alpine
+WORKDIR /control
+RUN corepack enable
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages ./packages
+# 项目（manifest + hooks）由 volume 挂载到 /project
+CMD ["sh", "-c", "cd /project && /control/packages/cli/dist/index.js publish && /control/packages/cli/dist/index.js console --host 0.0.0.0 --port 7860"]

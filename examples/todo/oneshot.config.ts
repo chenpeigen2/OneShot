@@ -1,0 +1,39 @@
+// 由 OneShot 控制台写回 —— 编辑请保持 erasable TS（无 enum/namespace）
+// 手工注释与排版在控制台写回时不保留；上一版备份为 oneshot.config.ts.bak
+import { defineConfig, s, service } from '@oneshot/core'
+
+export default defineConfig({
+  name: 'todo',
+  baseUrl: 'http://127.0.0.1:8090',
+  auth: { collection: 'users', signup: 'public' },
+
+  services: [
+    service('tasks', {
+      title: '任务',
+      collections: {
+        tasks: {
+          fields: {
+            title: s.text({ required: true, presentable: true, max: 200 }),
+            done: s.bool({ default: false }),
+            priority: s.number({ min: 0, max: 3, default: 0 }),
+            due: s.date({  }),
+            tags: s.select(['work', 'home', 'errand'], { values: ['work', 'home', 'errand'], multi: true }),
+            notes: s.json({  }),
+            owner: s.relation('users', { required: true, collection: 'users' }),
+          },
+rules: { list: 'owner', view: 'owner', create: 'owner', update: 'owner', delete: 'owner' },
+indexes: ['CREATE INDEX idx_tasks_owner ON tasks (owner)'],
+        },
+      },
+      actions: {
+        stats: { method: 'GET', rule: 'authenticated', handler: './hooks/tasks.ts#stats' },
+        summary: { method: 'GET', rule: 'authenticated', runtime: 'sidecar', handler: './hooks/tasks.sidecar.ts#summary' },
+      },
+      hooks: './hooks/tasks.ts',
+    }),
+  ],
+  environments: {
+    staging: { baseUrl: 'http://127.0.0.1:8091', sidecarUrl: 'http://127.0.0.1:7860' },
+  },
+  clients: { ts: { outDir: './web/src/api' }, dart: { outDir: './mobile/lib/api' } },
+})
