@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile.pb
     ports:
-      - "8090:8090"
+      - "5587:8090"
     environment:
       PB_SUPERUSER_EMAIL: ${ONESHOT_SUPERUSER_EMAIL:?set in .env}
       PB_SUPERUSER_PASSWORD: ${ONESHOT_SUPERUSER_PASSWORD:?set in .env}
@@ -20,7 +20,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.control
     ports:
-      - "7860:7860"
+      - "5588:7860"
     environment:
       ONESHOT_PB_URL: http://pb:8090
       # PB 的 sidecar 转发路由通过这个地址回打控制服务器（publish 时烘焙进 hooks）
@@ -28,7 +28,7 @@ services:
       ONESHOT_SUPERUSER_EMAIL: ${ONESHOT_SUPERUSER_EMAIL}
       ONESHOT_SUPERUSER_PASSWORD: ${ONESHOT_SUPERUSER_PASSWORD}
     volumes:
-      - ./project:/project
+      - ../examples/todo:/project
       - pb_hooks:/data/pb_hooks
     depends_on:
       - pb
