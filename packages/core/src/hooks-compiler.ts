@@ -24,8 +24,10 @@ function middlewareForRule(rule: string | undefined): string {
 interface HookGroup {
   /** 该组打包进的用户模块文件 */
   userFiles: string[]
-  /** 用户模块输出绝对路径 */
+  /** 用户模块输出绝对路径（本机写盘用） */
   moduleAbs: string
+  /** 模块文件名（PB 容器内经 __hooks 全局解析，跨部署形态正确） */
+  moduleName: string
   /** 注册生命周期钩子时的 collection filter 参数（PB 原生支持） */
   filter: string[]
   /** 该组是否注册生命周期钩子（纯 action 模块不注册） */
@@ -59,6 +61,7 @@ function buildHookGroups(manifest: ResolvedManifest, svc: ServiceEntry, hooksDir
     groups.push({
       userFiles: serviceFiles.map((rel) => resolve(manifest.root, rel)),
       moduleAbs: resolve(hooksDir, `${svc.name}.user.pb.js`).split('\\').join('/'),
+      moduleName: `${svc.name}.user.pb.js`,
       filter: collNames,
       lifecycle: !!svc.hooks || hasDefaults,
       kind: 'service',
@@ -70,6 +73,7 @@ function buildHookGroups(manifest: ResolvedManifest, svc: ServiceEntry, hooksDir
     groups.push({
       userFiles: [resolve(manifest.root, def.hooks)],
       moduleAbs: resolve(hooksDir, `${svc.name}.${collName}.user.pb.js`).split('\\').join('/'),
+      moduleName: `${svc.name}.${collName}.user.pb.js`,
       filter: [collName],
       lifecycle: true,
       kind: 'collection',
@@ -87,7 +91,9 @@ async function buildEntrySource(
   const lines: string[] = []
 
   // ⚠️ PB JSVM 文档约束：hook handler 在隔离上下文中执行，模块顶层绑定在 handler 内不可见，
-  // 共享代码必须走 .user.pb.js 模块 + handler 内绝对路径 require。
+  // 共享代码必须走 .user.pb.js 模块 + handler 内 require。
+  // require 路径必须用 __hooks 全局拼接（PB 容器内 hooks 目录随部署形态变化，
+  // 烘焙宿主机绝对路径在 docker 部署下指向不存在的路径）。
   // 另：requestInfo().body 里 json 类型字段的值会被 PB 回填为原始字节（[]byte），__normBody
   // 只把「顶层、全为 0-255 数字的数组」还原成解析后的 JSON，其余值原样透传（深遍历 Go 绑定对象会炸）。
   lines.push(`// 由 oneshot publish 生成，请勿手改（源码见 manifest 中的 hooks/handler 文件）`)
@@ -130,7 +136,7 @@ ${pbHook}(function (e) {
       if (v === '' || v === undefined || v === null) e.record.set(k, d[k])
     }
   }` : ''}
-  var u = require(${JSON.stringify(group.moduleAbs)})
+  var u = require(__hooks + ${JSON.stringify('/' + group.moduleName)})
   var fn = u[${JSON.stringify(exportName)}]
   if (fn) {
     var info = null
@@ -148,7 +154,7 @@ ${pbHook}(function (e) {
   }
 
   // jsvm action 路由：从服务级用户模块取 handler
-  const serviceModuleAbs = groups.find((g) => g.kind === 'service')?.moduleAbs
+  const serviceModuleName = groups.find((g) => g.kind === 'service')?.moduleName
   for (const [actionName, action] of Object.entries(svc.actions ?? {})) {
     const method = action.method ?? 'POST'
     const route = `/api/oneshot/${svc.name}/${actionName}`
@@ -183,7 +189,7 @@ routerAdd(${JSON.stringify(method)}, ${JSON.stringify(route)}, function (e) {
 
     lines.push(`
 routerAdd(${JSON.stringify(method)}, ${JSON.stringify(route)}, function (e) {
-  var u = require(${JSON.stringify(serviceModuleAbs)})
+  var u = require(__hooks + ${JSON.stringify('/' + serviceModuleName)})
   var info = e.requestInfo()
   var out = u[${JSON.stringify(exportName)}]({
     e: e, app: e.app, auth: e.auth,
