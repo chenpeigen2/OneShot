@@ -23,6 +23,10 @@ export default defineConfig({
           },
 rules: { list: 'owner', view: 'owner', create: 'owner', update: 'owner', delete: 'owner' },
 indexes: ['CREATE INDEX idx_tasks_owner ON tasks (owner)'],
+          // 种子演示：发布时幂等灌入欢迎任务（__key 查重；relation 用 { __collection, __filter } 查找解析）
+          seeds: [
+            { __key: 'title', title: '欢迎来到 OneShot', priority: 1, tags: ['work'], owner: { __collection: 'users', __filter: 'id != ""' } },
+          ],
         },
       },
       actions: {

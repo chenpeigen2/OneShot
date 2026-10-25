@@ -106,6 +106,25 @@ export interface CollectionDef {
    * 服务级 hooks（ServiceDef.hooks）则对所有 collection 生效 —— 按意图选择层级。
    */
   hooks?: string
+  /**
+   * 种子数据：publish 时幂等灌入（演示/起步数据，简化开发）。
+   * 每条必须带 __key（查重字段名，按其值 filter 查，存在即跳过，不更新）。
+   * relation 字段的值可写字面 id，或 { __collection, __filter } 由 publish 查找解析。
+   */
+  seeds?: SeedRecord[]
+}
+
+export type SeedValue =
+  | string
+  | number
+  | boolean
+  | string[]
+  | { __collection: string; __filter: string }
+
+export interface SeedRecord {
+  /** 查重字段名（必须是本 collection 的已定义字段） */
+  __key: string
+  [field: string]: SeedValue | string
 }
 
 export type ActionMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'

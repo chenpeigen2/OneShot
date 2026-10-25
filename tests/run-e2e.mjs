@@ -184,7 +184,7 @@ async function main() {
     TEST_PB_BIN: pbBin,
   }
 
-  const suites = ['core', 'sidecar-realtime', 'manifest', 'env-collections', 'templates', 'doctor', 'security', 'console-ui']
+  const suites = ['core', 'sidecar-realtime', 'manifest', 'env-collections', 'templates', 'doctor', 'security', 'console-ui', 'seeds']
     .filter((s) => !ONLY || s === ONLY)
   let failed = 0
   for (const suite of suites) {

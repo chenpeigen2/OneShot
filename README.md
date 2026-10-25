@@ -75,6 +75,15 @@ export default defineConfig({
 
 **Hooks**（`hooks/*.ts`）：`beforeValidate` / `beforeCreateRequest` / `afterCreate` / `beforeUpdateRequest` / `afterUpdate` / `beforeDelete` / `afterDelete` / 自定义 action handler。上下文：`{ e, app, record?, auth?, query?, body?, http, log }`。拒绝请求抛 PB 内置错误：`BadRequestError` / `ForbiddenError` / ...（消息透传给客户端）。同步逻辑，无 npm/Node API —— 与 PB JSVM（goja）能力一致。
 
+**种子数据**（`seeds`，简化起步）：manifest 里声明演示数据，publish 幂等灌入 —— `__key` 指定查重字段（存在即跳过、不覆盖已有数据），relation 字段可用 `{ __collection, __filter }` 由 publish 查找解析（shop 模板已内置演示商品种子）：
+
+```ts
+seeds: [
+  { __key: 'name', name: '手冲咖啡豆', price: 39.9, stock: 100, category: 'food' },
+  { __key: 'title', title: '欢迎任务', owner: { __collection: 'users', __filter: 'id != ""' } },
+],
+```
+
 **Sidecar action**（重逻辑的逃生门，Q4 预留口子）：
 
 ```ts

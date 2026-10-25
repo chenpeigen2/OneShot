@@ -23,6 +23,12 @@ export function shopConfig(): OneshotConfig {
             },
             indexes: ['CREATE INDEX idx_shop_products_category ON products (category)'],
             rules: { list: 'public', view: 'public', create: 'superuser', update: 'superuser', delete: 'superuser' },
+            // 种子数据：publish 幂等灌入（__key 查重，存在即跳过）—— 新项目开箱即有演示商品
+            seeds: [
+              { __key: 'name', name: '手冲咖啡豆 · 埃塞俄比亚', price: 39.9, stock: 100, category: 'food', description: '产地直采，日晒处理', active: true },
+              { __key: 'name', name: '机械键盘 68 键', price: 299, stock: 50, category: 'electronics', description: '热插拔轴体', active: true },
+              { __key: 'name', name: '纯棉 T 恤', price: 59, stock: 200, category: 'clothing', description: '基础款', active: true },
+            ],
           },
           orders: {
             fields: {

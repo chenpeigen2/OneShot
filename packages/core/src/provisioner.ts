@@ -114,6 +114,8 @@ export interface PublishReport {
   updated: string[]
   unchanged: string[]
   pruned: string[]
+  /** 本次实际灌入的种子（collection:key）；幂等重放时为空 */
+  seeded: string[]
   hooksFiles: string[]
   clientsDirs: string[]
   snapshotHash: string
@@ -154,7 +156,7 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
   const collectionIds = new Map(existingList.map((c) => [c.name, c.id]))
 
   const report: PublishReport = {
-    baseUrl, created: [], updated: [], unchanged: [], pruned: [], hooksFiles: [], clientsDirs: [],
+    baseUrl, created: [], updated: [], unchanged: [], pruned: [], seeded: [], hooksFiles: [], clientsDirs: [],
     snapshotHash: '', publishedAt: new Date().toISOString(),
   }
 
@@ -244,15 +246,36 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
       }
       const { relationCount, ...full } = desired
       void relationCount
-      await pb.updateCollection(current.id, {
-        fields: mergeFields(current.fields, full.fields),
-        indexes: full.indexes,
-        listRule: full.listRule ?? null,
-        viewRule: full.viewRule ?? null,
-        createRule: full.createRule ?? null,
-        updateRule: full.updateRule ?? null,
-        deleteRule: full.deleteRule ?? null,
-      })
+      const mergedFields = mergeFields(current.fields, full.fields)
+      // 预检：PB 不允许原地改字段类型 —— 给出可行动的错误而不是裸 400
+      const typeChanges = current.fields
+        .map((f: any) => {
+          const next = mergedFields.find((m: any) => m.name === f.name)
+          return next && next.type !== f.type ? `${f.name}: ${f.type} → ${next.type}` : null
+        })
+        .filter(Boolean)
+      if (typeChanges.length) {
+        throw new Error(`collection "${collName}" 存在类型冲突字段（PocketBase 不支持原地改类型，请换字段名或先在 PB Admin UI 手动迁移）：${typeChanges.join('；')}`)
+      }
+      try {
+        await pb.updateCollection(current.id, {
+          fields: mergedFields,
+          indexes: full.indexes,
+          listRule: full.listRule ?? null,
+          viewRule: full.viewRule ?? null,
+          createRule: full.createRule ?? null,
+          updateRule: full.updateRule ?? null,
+          deleteRule: full.deleteRule ?? null,
+        })
+      } catch (err: any) {
+        // 诊断：fields 逐位对比（定位 type change 类错误的真实差异）
+        const detail = current.fields.map((f: any, i: number) => {
+          const next = mergedFields[i]
+          return `${i}: ${f.type}:${f.name}#${f.id ?? ''} -> ${next ? `${next.type}:${next.name}#${next.id ?? ''}` : '(none)'}`
+        })
+        err.message = `${err.message}\n[诊断 ${collName}] 现有 vs 发送:\n${detail.join('\n')}`
+        throw err
+      }
       report.updated.push(collName)
       log(`  ~ collection ${collName} 已更新`)
     }
@@ -285,7 +308,44 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
   const staleHooks = await pruneStaleHooks(hooksDir, prevServiceNames.filter((n) => !currentServiceNames.includes(n)))
   for (const file of staleHooks) log(`  - 清理过期 hooks：${file.split('/').pop()}`)
 
-  // 6) 快照写入 oneshot_meta（供控制台/CLI 读取）
+  // 6) 种子数据：幂等灌入（__key 查重，存在跳过；超管身份插入 —— JSVM 钩子照常生效）
+  for (const svc of config.services) {
+    for (const [collName, def] of Object.entries(svc.collections)) {
+      for (const seed of def.seeds ?? []) {
+        const { __key, ...fields } = seed as Record<string, any>
+        const keyValue = fields[__key]
+        if (keyValue === undefined) {
+          throw new Error(`seeds 配置错误：${collName} 的种子缺少 ${__key} 字段值`)
+        }
+        const existing = await pb.listRecords(
+          collName, `?filter=${encodeURIComponent(`${__key} = "${String(keyValue).replace(/"/g, '\\"')}"`)}&perPage=1`,
+        )
+        if (existing.totalItems > 0) continue
+
+        // relation 字段的 { __collection, __filter } 查找解析
+        const body: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(fields)) {
+          if (v !== null && typeof v === 'object' && !Array.isArray(v) && '__collection' in (v as any)) {
+            const lookup = v as { __collection: string; __filter: string }
+            const found = await pb.listRecords(
+              lookup.__collection, `?filter=${encodeURIComponent(lookup.__filter)}&perPage=1`,
+            )
+            if (found.totalItems === 0) {
+              throw new Error(`种子 ${collName}.${String(keyValue)} 的 relation 字段 ${k} 查无记录：${lookup.__collection} 过滤 ${lookup.__filter}`)
+            }
+            body[k] = found.items[0].id
+          } else {
+            body[k] = v
+          }
+        }
+        await pb.createRecord(collName, body)
+        report.seeded.push(`${collName}:${String(keyValue)}`)
+        log(`  🌱 种子已灌入：${collName} · ${__key}=${String(keyValue)}`)
+      }
+    }
+  }
+
+  // 7) 快照写入 oneshot_meta（供控制台/CLI 读取）
   const snapshot = buildSnapshot(config)
   const hash = snapshotHash(snapshot)
   report.snapshotHash = hash

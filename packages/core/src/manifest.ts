@@ -109,6 +109,27 @@ export function validateConfig(config: OneshotConfig, root: string): void {
         const abs = resolve(root, def.hooks)
         if (!existsSync(abs)) fail(`找不到 ${svc.name}.${collName} 的 hooks 文件：${abs}`)
       }
+      for (const [i, seed] of (def.seeds ?? []).entries()) {
+        const at = `${svc.name}.${collName}.seeds[${i}]`
+        if (!seed || typeof seed.__key !== 'string' || !seed.__key) {
+          fail(`${at} 缺少 __key（查重字段名，publish 按其值幂等查重）`)
+        }
+        const fieldNames = Object.keys(def.fields ?? {})
+        if (!fieldNames.includes(seed.__key)) {
+          fail(`${at}.__key "${seed.__key}" 不是 ${collName} 的已定义字段`)
+        }
+        if (seed.__key === 'id') fail(`${at}.__key 不能是 id`)
+        for (const [k, v] of Object.entries(seed)) {
+          if (k === '__key') continue
+          if (!fieldNames.includes(k)) fail(`${at} 引用了未定义字段 "${k}"`)
+          if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+            const lookup = v as any
+            if (typeof lookup.__collection !== 'string' || typeof lookup.__filter !== 'string') {
+              fail(`${at}.${k} 的 relation 查找对象需同时含 __collection 与 __filter`)
+            }
+          }
+        }
+      }
     }
 
     if (svc.hooks) resolveAction(svc, '__hooks__', root)

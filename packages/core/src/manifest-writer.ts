@@ -97,6 +97,14 @@ function serializeService(svc: Record<string, any>): string {
     const indexes = serializeIndexes(d.indexes)
     if (indexes) lines.push(indexes.trimStart())
     if (d.hooks !== undefined) lines.push(`          hooks: ${value(d.hooks)},`)
+    if (Array.isArray(d.seeds) && d.seeds.length) {
+      lines.push('          seeds: [')
+      for (const seed of d.seeds) {
+        const parts = Object.entries(seed as Record<string, unknown>).map(([k, v]) => `${k}: ${value(v)}`)
+        lines.push(`            { ${parts.join(', ')} },`)
+      }
+      lines.push('          ],')
+    }
     lines.push('        },')
   }
   lines.push('      },')
