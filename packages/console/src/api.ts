@@ -46,7 +46,9 @@ async function pb<T = any>(path: string, opts: { method?: string; body?: unknown
     if (res.status === 401) logout()
     throw new Error(err?.message ?? `HTTP ${res.status} — ${path}`)
   }
-  return res.json() as Promise<T>
+  // 204/空 body（如创建备份）直接返回 undefined，避免 res.json() 抛 SyntaxError
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
 }
 
 export interface PbCollection {
@@ -125,17 +127,15 @@ export async function restoreBackup(name: string): Promise<void> {
 }
 
 export async function downloadBackup(name: string): Promise<void> {
-  const res = await fetch(`${baseUrl}/api/backups/${encodeURIComponent(name)}`, {
-    headers: token ? { Authorization: token } : {},
-  })
-  if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`)
-  const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
+  // PB 的备份下载走文件 token 机制：超管 auth token 直接 GET 是 403，
+  // 须先 POST /api/files/token 换短期 fileToken（约 2 分钟），再 ?token= 触发原生下载
+  const ft = await pb<{ token: string }>('/api/files/token', { method: 'POST' })
   const a = document.createElement('a')
-  a.href = url
-  a.download = name.endsWith('.zip') ? name : name + '.zip'
+  a.href = `${baseUrl}/api/backups/${encodeURIComponent(name)}?token=${encodeURIComponent(ft.token)}`
+  a.download = name
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
 }
 
 export const saveManifest = (config: any) =>

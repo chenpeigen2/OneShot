@@ -128,7 +128,7 @@ function Dashboard({ meta, collections, report, onOpen, onEdit }: {
         <section className="space-y-4">
           <h2 className="text-sm font-medium text-zinc-400">服务（编辑会写回 oneshot.config.ts 并立即发布）</h2>
           {snapshot.services.map((svc) => (
-            <div key={svc.name} className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+            <div key={svc.name} data-testid={`service-card-${svc.name}`} className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
               <div className="flex items-center gap-3">
                 <h3 className="text-lg font-semibold">{svc.title || svc.name}</h3>
                 <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">{svc.name}</span>
@@ -142,7 +142,7 @@ function Dashboard({ meta, collections, report, onOpen, onEdit }: {
                   const coll = collections.find((x) => x.name === c.name)
                   if (!coll) return null
                   return (
-                    <button key={c.name} onClick={() => onOpen(coll)}
+                    <button key={c.name} onClick={() => onOpen(coll)} data-testid={`coll-card-${c.name}`}
                       className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-left hover:border-amber-600/60">
                       <div>
                         <div className="font-mono text-sm">{c.name}</div>

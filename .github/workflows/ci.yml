@@ -26,7 +26,10 @@ jobs:
       - name: 构建
         run: pnpm -r build
 
-      - name: e2e 测试（隔离实例，99 项断言）
+      - name: 安装 Playwright 浏览器（console-ui 套件；pnpm onlyBuiltDependencies 白名单会拦 postinstall，需显式安装）
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: e2e 测试（隔离实例，121 项断言）
         run: node tests/run-e2e.mjs
 
       - name: 保留失败现场
