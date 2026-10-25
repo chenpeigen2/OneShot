@@ -1,10 +1,9 @@
+# 发行包：构建前把对应平台的 pb.zip 放到本目录（服务器/离线环境不依赖 GitHub 下载）
+# 获取：从 https://github.com/pocketbase/pocketbase/releases 下载 pocketbase_<版本>_linux_<arch>.zip
 FROM alpine:3.20
-ARG PB_VERSION=0.40.6
-ARG TARGETARCH
-RUN apk add --no-cache unzip ca-certificates curl \
- && case "$TARGETARCH" in amd64) PB_ARCH=amd64;; arm64) PB_ARCH=arm64;; *) PB_ARCH=amd64;; esac \
- && curl -fsSL "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_${PB_ARCH}.zip" -o /tmp/pb.zip \
- && unzip /tmp/pb.zip -d /usr/local/bin \
+RUN apk add --no-cache unzip ca-certificates curl
+COPY pb.zip /tmp/pb.zip
+RUN unzip /tmp/pb.zip -d /usr/local/bin \
  && chmod +x /usr/local/bin/pocketbase \
  && rm /tmp/pb.zip
 COPY entrypoint.sh /entrypoint.sh

@@ -35,7 +35,7 @@ services:
       ONESHOT_SUPERUSER_EMAIL: ${ONESHOT_SUPERUSER_EMAIL:?set in .env}
       ONESHOT_SUPERUSER_PASSWORD: ${ONESHOT_SUPERUSER_PASSWORD:?set in .env}
     volumes:
-      - ../examples/todo:/project
+      - ../examples/todo:/control/project
       - pb_hooks:/data/pb_hooks
     depends_on:
       pb:
