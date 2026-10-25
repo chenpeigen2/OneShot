@@ -215,12 +215,28 @@ function RecordsView({ collection, onBack }: { collection: PbCollection; onBack:
   const [selected, setSelected] = useState<any>(null)
   const [error, setError] = useState('')
   const perPage = 20
+  // 过滤/搜索：字段 + 值（text 系字段用 ~ 包含匹配，其余精确等值）；排序字段可切换
+  const [filterField, setFilterField] = useState('')
+  const [filterValue, setFilterValue] = useState('')
+  const [sortField, setSortField] = useState('-created')
+  const filterFields = collection.fields.filter((f) => !['password', 'json', 'file', 'geoPoint'].includes(f.type))
+
+  const filterExpr = useMemo(() => {
+    if (!filterField || !filterValue) return undefined
+    const f = collection.fields.find((x) => x.name === filterField)
+    const v = String(filterValue).replace(/"/g, '\\"')
+    if (f && ['text', 'email', 'url', 'editor'].includes(f.type)) return `${filterField} ~ "${v}"`
+    return `${filterField} = "${v}"`
+  }, [filterField, filterValue, collection.fields])
 
   const load = useCallback(() => {
     setError('')
-    fetchRecords(collection.name, page, perPage).then(setData).catch((e) => setError(e?.message ?? String(e)))
-  }, [collection.name, page])
+    fetchRecords(collection.name, page, perPage, sortField, filterExpr).then(setData).catch((e) => setError(e?.message ?? String(e)))
+  }, [collection.name, page, sortField, filterExpr])
 
+  useEffect(() => {
+    setPage(1)
+  }, [filterField, filterValue, sortField])
   useEffect(load, [load])
 
   const columns = collection.fields.filter((f) => f.type !== 'password').slice(0, 7)
@@ -235,6 +251,26 @@ function RecordsView({ collection, onBack }: { collection: PbCollection; onBack:
       </div>
 
       {error && <p className="mt-4 rounded-lg bg-red-950/60 px-3 py-2 text-sm text-red-300">{error}</p>}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <select value={filterField} onChange={(e) => setFilterField(e.target.value)} className={`${inputCls} text-xs`} aria-label="过滤字段">
+          <option value="">全部字段（不过滤）</option>
+          {filterFields.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+        </select>
+        <input value={filterValue} onChange={(e) => setFilterValue(e.target.value)} placeholder="过滤值（text 字段为包含匹配）" aria-label="过滤值" className={`${inputCls} w-56 text-xs`} />
+        {filterExpr && (
+          <button onClick={() => { setFilterField(''); setFilterValue('') }} className="text-xs text-zinc-500 hover:text-amber-400">清除</button>
+        )}
+        <span className="text-zinc-700">|</span>
+        <select value={sortField} onChange={(e) => setSortField(e.target.value)} className={`${inputCls} text-xs`} aria-label="排序">
+          <option value="-created">最新优先</option>
+          <option value="created">最早优先</option>
+          <option value="-updated">最近更新</option>
+          {columns.slice(0, 4).map((f) => (
+            <option key={f.name} value={f.name}>{f.name} 升序</option>
+          ))}
+        </select>
+      </div>
 
       <div className="mt-4 overflow-x-auto rounded-2xl border border-zinc-800">
         <table className="w-full text-sm">

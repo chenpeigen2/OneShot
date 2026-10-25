@@ -135,7 +135,19 @@ try {
   await page.getByText('记录详情').waitFor({ state: 'visible', timeout: 10000 })
   const drawerJson = await page.locator('pre').textContent()
   assert('记录: 详情抽屉 JSON 含记录 id', drawerJson?.includes(seededId), `pre=${drawerJson?.slice(0, 80)}`)
+
+  // 过滤/排序：text 字段包含匹配（seedTitle 为含时间戳的唯一值）
   await page.getByRole('button', { name: '✕' }).click()
+  await page.locator('tr', { hasText: seedTitle }).first().waitFor({ state: 'visible', timeout: 10000 })
+  const rowsBeforeFilter = await page.locator('tbody tr').count()
+  await page.getByRole('combobox', { name: '过滤字段' }).selectOption('title')
+  await page.getByRole('textbox', { name: '过滤值' }).fill(seedTitle)
+  await page.locator('tbody tr', { hasText: seedTitle }).first().waitFor({ state: 'visible', timeout: 10000 })
+  const rowsAfterFilter = await page.locator('tbody tr').count()
+  assert('记录: 字段过滤收敛结果集并命中目标行', rowsAfterFilter >= 1 && rowsAfterFilter <= rowsBeforeFilter, `before=${rowsBeforeFilter} after=${rowsAfterFilter}`)
+  await page.getByText('清除').click()
+  await page.getByRole('combobox', { name: '过滤字段' }).selectOption('')
+  await page.locator('tbody tr').first().waitFor({ state: 'visible', timeout: 10000 })
   await page.getByRole('button', { name: '← 返回' }).click()
   await page.getByText('发布状态').waitFor({ state: 'visible', timeout: 10000 })
 

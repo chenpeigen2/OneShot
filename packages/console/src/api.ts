@@ -79,10 +79,12 @@ export interface MetaRecord {
 
 export const fetchMeta = () => pb<{ items: MetaRecord[] }>('/api/collections/oneshot_meta/records?perPage=5')
 
-export const fetchRecords = (coll: string, page: number, perPage: number, sort = '-created') =>
-  pb<{ items: any[]; totalItems: number; totalPages: number }>(
-    `/api/collections/${coll}/records?page=${page}&perPage=${perPage}&sort=${sort}`,
+export const fetchRecords = (coll: string, page: number, perPage: number, sort = '-created', filter?: string) => {
+  const q = filter ? `&filter=${encodeURIComponent(filter)}` : ''
+  return pb<{ items: any[]; totalItems: number; totalPages: number }>(
+    `/api/collections/${coll}/records?page=${page}&perPage=${perPage}&sort=${sort}${q}`,
   )
+}
 
 export function fileUrl(coll: string, recordId: string, filename: string): string {
   return `${baseUrl}/api/files/${coll}/${recordId}/${filename}`
