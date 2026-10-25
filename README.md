@@ -100,7 +100,7 @@ sidecar handler 是完整 Node：npm 包、异步、`node:crypto` 随便用。�
 | `oneshot superuser <email> <pass>` | 创建/重置超管 |
 | `oneshot console` | 控制服务器：控制台（服务编辑器 + 备份面板）+ manifest 写回 API + sidecar JSON API（同一端口 7860） |
 | `oneshot doctor [--json]` | 一键体检：manifest / 引擎 / 连通性 / 凭据 / 快照漂移 / 孤儿 hooks / 磁盘占用（`--json` 供 CI，绝不读 stdin） |
-| `pnpm test:e2e` | 全量 e2e（隔离双实例，69 项断言，CI 同款） |
+| `pnpm test:e2e` | 全量 e2e（隔离双实例，99 项断言，CI 同款） |
 
 环境变量：`ONESHOT_PB_URL`、`ONESHOT_SUPERUSER_EMAIL`、`ONESHOT_SUPERUSER_PASSWORD`、`ONESHOT_SIDECAR_URL`（compose 内 `http://control:7860`；发布时烘焙进 hooks，支持项目根 `.env`）。
 
@@ -181,7 +181,8 @@ oneshot publish                 # 默认：顶层 baseUrl
 **控制台编辑写回**：服务编辑器改字段/规则、增删 collection → 写回 `oneshot.config.ts`（原文件备份 `.bak`，用 git diff/回滚）→ 立即 diff 式发布。GitOps 语义不变：文件仍是唯一真源，控制台只是它的 GUI。注意三点：写回不保留手工注释与排版；从 manifest 删除字段/ collection 不删 PB 侧对象与数据（防误删，彻底删除去 PB Admin UI）；PB 路由注册唯一（sidecar handler 改动由 dev watch 自动热重载 sidecar registry）。
 - **发布快照**：写入 `oneshot_meta` collection（项目名、manifest hash、服务清单），控制台据此渲染总览。
 - **JSVM 可靠面（v0.40.6 实测）**：`onRecordValidate` + 抛 `BadRequestError` + 文本/日期字段 set 是可靠组合；`onRecordCreateRequest` 在含 json 字段的 collection 上不可依赖、`record.set` 跨 record 写值不持久化、filter 参数注册无效 —— 框架已把这些约束消化进生成器（作用域判断走 `e.record.collection().name`、共享代码走 `.user.pb.js` 模块 + 绝对路径 require、body 字节归一化），**跨表写值类业务逻辑请用 sidecar action**（shop 模板的 checkout 即示范）。
-- **测试与 CI**：`pnpm test:e2e` 拉起隔离双实例跑 6 个套件（core 15 / sidecar-realtime 7 / manifest 11 / env-collections 7 / templates 15 / doctor 14，共 69 项断言）；GitHub Actions 在 push/PR 时自动执行同一套件。生成的 TS 客户端过 `tsc --strict`，Dart 过 `dart analyze`。
+- **测试与 CI**：`pnpm test:e2e` 拉起隔离双实例跑 7 个套件（core 15 / sidecar-realtime 11 / manifest 22 / env-collections 7 / templates 15 / doctor 14 / security 15，共 99 项断言，按 unix 口径计）；GitHub Actions 在 push/PR 时自动执行同一套件。生成的 TS 客户端过 `tsc --strict`，Dart 过 `dart analyze`。
+- **sidecar 信任边界**：sidecar token 是"绕过 PB 直调 handler"的唯一凭据，出现在三处——`.oneshot/sidecar-token` 母本（每次 publish/console 启动自动自愈为 `0600`、目录 `0700`，只收敛权限、绝不轮换值）、`pb_hooks/<svc>.pb.js` 明文烘焙（设计使然：PB JSVM 运行时需要它发 `$http.send`，靠卷隔离与主机用户卫生缓解）、控制服务器内存。任何持有 token 的进程可跳过 PB collection 规则直调 `/sidecar/{service}/{action}`——请像保管数据库密码一样保管该文件。**handler 路径允许引用项目外文件**（`../` 或绝对路径均可，如共享 hooks 库）：这属文档化决策——manifest 由超管编写、超管为可信角色，引用越界文件是其自担风险；security 套件已把该现状钉进 CI，未来收紧/放宽都会红灯提示为有意识的行为变更。
 - **备份**：控制台「备份」页基于 PB 原生 backups API（创建/下载/恢复/删除；恢复会重启 PB）。
 
 ## Roadmap

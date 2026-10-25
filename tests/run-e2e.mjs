@@ -116,10 +116,11 @@ async function main() {
   const manifestDir = scaffold('manifest-project')
 
   // 统一 sidecar token（两个项目共用，控制服务器与 publish 烘焙一致）
+  // 源头保持权限不变式：目录 0700 / token 0600（与 core 创建路径语义一致，security 套件有断言）
   const token = Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)
   for (const dir of [fixtureDir, manifestDir]) {
-    mkdirSync(join(dir, '.oneshot'), { recursive: true })
-    writeFileSync(join(dir, '.oneshot/sidecar-token'), token)
+    mkdirSync(join(dir, '.oneshot'), { recursive: true, mode: 0o700 })
+    writeFileSync(join(dir, '.oneshot/sidecar-token'), token, { mode: 0o600 })
   }
 
   const mainHooksDir = mainInst.hooksDir
@@ -183,7 +184,7 @@ async function main() {
     TEST_PB_BIN: pbBin,
   }
 
-  const suites = ['core', 'sidecar-realtime', 'manifest', 'env-collections', 'templates', 'doctor']
+  const suites = ['core', 'sidecar-realtime', 'manifest', 'env-collections', 'templates', 'doctor', 'security']
     .filter((s) => !ONLY || s === ONLY)
   let failed = 0
   for (const suite of suites) {

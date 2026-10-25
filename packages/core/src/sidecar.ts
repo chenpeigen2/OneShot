@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, resolve } from 'node:path'
 import { build } from 'esbuild'
@@ -21,7 +21,14 @@ export function sidecarTokenPath(root: string): string {
 
 export function getOrCreateSidecarToken(root: string): string {
   const path = sidecarTokenPath(root)
-  if (existsSync(path)) return readFileSync(path, 'utf8').trim()
+  if (existsSync(path)) {
+    // 自愈：已存在的 token 母本把目录/文件权限强制收敛到 0700/0600（幂等，已正确时为无害系统调用）。
+    // 绝不重生成内容 —— 旧 token 已烘焙进上次发布的 pb_hooks 产物，轮换会让 PB→sidecar 转发断链。
+    const dir = resolve(root, '.oneshot')
+    chmodSync(dir, 0o700)
+    chmodSync(path, 0o600)
+    return readFileSync(path, 'utf8').trim()
+  }
   const token = randomBytes(24).toString('hex')
   // token 是服务间共享凭据：目录与文件都只给属主权限
   mkdirSync(resolve(root, '.oneshot'), { recursive: true, mode: 0o700 })

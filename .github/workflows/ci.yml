@@ -26,7 +26,7 @@ jobs:
       - name: 构建
         run: pnpm -r build
 
-      - name: e2e 测试（隔离实例，65 项断言）
+      - name: e2e 测试（隔离实例，99 项断言）
         run: node tests/run-e2e.mjs
 
       - name: 保留失败现场
