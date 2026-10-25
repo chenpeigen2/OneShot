@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, writeFile, watch } from 'node:fs/promises'
+import { writeFileSync } from 'node:fs'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, basename, resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
@@ -7,7 +8,7 @@ import { loadManifest } from '@oneshot/core'
 import { publish } from '@oneshot/core'
 import { generateClients } from '@oneshot/core'
 import { serializeConfig } from '@oneshot/core'
-import { buildSidecarRegistry, handleSidecarRequest, getOrCreateSidecarToken, hasSidecarActions } from '@oneshot/core'
+import { buildSidecarRegistry, handleSidecarRequest, getOrCreateSidecarToken, hasSidecarActions, readServiceAccountToken } from '@oneshot/core'
 import type { ResolvedManifest, SidecarRegistry } from '@oneshot/core'
 import {
   consoleDist,
@@ -219,6 +220,7 @@ async function startControl(flags: Record<string, string | boolean>): Promise<{
   }
 
   let currentManifest: ResolvedManifest | null = null
+  const currentRoot = () => currentManifest?.root ?? process.cwd()
   let registry: SidecarRegistry | null = null
   let sidecarToken = ''
   let pbUrl = 'http://127.0.0.1:8090'
@@ -252,7 +254,7 @@ async function startControl(flags: Record<string, string | boolean>): Promise<{
   const api = manifestApi
     ? async (req: any, res: any): Promise<boolean> => {
         if (await manifestApi(req, res)) return true
-        if (registry && (await handleSidecarRequest(registry, req, res, { token: sidecarToken, pbUrl })).handled) return true
+        if (registry && (await handleSidecarRequest(registry, req, res, { token: sidecarToken, pbUrl, systemToken: readServiceAccountToken(currentRoot()) })).handled) return true
         return false
       }
     : undefined
@@ -270,6 +272,10 @@ async function startControl(flags: Record<string, string | boolean>): Promise<{
   }
 
   const url = await serveControlServer({ distDir: dist, host, port, api })
+  // 端口落盘：publish 读它对齐 sidecar 转发地址（多项目并存时不必手写 sidecarUrl）
+  if (currentManifest) {
+    try { writeFileSync(join(currentManifest.root, '.oneshot/console-port'), String(port)) } catch {}
+  }
   const sidecarRoutes = (registry?.entries ?? []).map((e) => `${e.method} ${e.route} → Node`)
   return { url, sidecarRoutes, rebuildSidecar }
 }

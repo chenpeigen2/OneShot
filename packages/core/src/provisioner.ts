@@ -295,47 +295,7 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
     log(`  ⚠ 服务账号不可用（sidecar 系统级操作将受限）：${err?.message ?? err}`)
   }
 
-  // 5) hooks 编译（默认 <项目根>/pb_hooks —— 与 `oneshot engine up` 的 --hooksDir 一致）
-  const hooksDir = opts.hooksDir ?? resolvePath(manifest.root, 'pb_hooks')
-  const sidecarUrl = (process.env.ONESHOT_SIDECAR_URL
-    || envBlock?.sidecarUrl
-    || (manifest.config as any).sidecarUrl
-    || 'http://127.0.0.1:7860').replace(/\/$/, '')
-  const sidecarToken = getOrCreateSidecarToken(manifest.root)
-
-  // 上一次发布快照（hooks 过期清理与 prune 的所有权依据）；project 名先转义再进 filter 串
-  const escapedProject = config.name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  const prevMeta = await pb.listRecords(
-    META_COLLECTION, `?filter=${encodeURIComponent(`project = "${escapedProject}"`)}&perPage=1`,
-  )
-  const prevSnapshot = prevMeta.items[0]?.snapshot
-  const prevServiceNames: string[] = prevSnapshot?.services?.map((s: any) => s.name) ?? []
-  const currentServiceNames = config.services.map((s) => s.name)
-
-  // auth 字段默认值：独立注入钩子（不进业务服务的作用域）
-  const authDefaults: Record<string, unknown> = {}
-  for (const [f, spec] of Object.entries(config.auth?.fields ?? {})) {
-    if (spec.options.default !== undefined) authDefaults[f] = spec.options.default
-  }
-  if (Object.keys(authDefaults).length) {
-    const authEntry = buildAuthDefaultsEntry(authCollectionName, authDefaults)
-    const authEntryPath = resolvePath(hooksDir, `${authCollectionName}.defaults.pb.js`)
-    await writeFile(authEntryPath, authEntry, 'utf8')
-    report.hooksFiles.push(authEntryPath)
-    log(`  ⚙ auth 默认值注入：${authCollectionName}（${Object.keys(authDefaults).join(', ')}）`)
-  }
-
-  for (const svc of config.services) {
-    const result = await compileServiceHooks(manifest, svc, hooksDir, { sidecarUrl, sidecarToken })
-    if (result) {
-      report.hooksFiles.push(...result.files)
-      log(`  ⚙ hooks 编译完成：${svc.name}（${result.files.length} 个文件）`)
-    }
-  }
-  const staleHooks = await pruneStaleHooks(hooksDir, prevServiceNames.filter((n) => !currentServiceNames.includes(n)))
-  for (const file of staleHooks) log(`  - 清理过期 hooks：${file.split('/').pop()}`)
-
-  // 6) 种子数据：幂等灌入（__key 查重，存在跳过；超管身份插入 —— JSVM 钩子照常生效）
+  // 5.5) 种子数据：幂等灌入（超管 API 直插，不依赖 JSVM；置于 hooks 写入前避开引擎热重载窗口）（__key 查重，存在跳过；超管身份插入 —— JSVM 钩子照常生效）
   for (const svc of config.services) {
     for (const [collName, def] of Object.entries(svc.collections)) {
       for (const seed of def.seeds ?? []) {
@@ -372,6 +332,54 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
     }
   }
 
+  // 6) hooks 编译（最后写 hooks 文件 —— 之后的引擎热重载只影响 meta 快照，已加重试兜底）
+  const hooksDir = opts.hooksDir ?? resolvePath(manifest.root, 'pb_hooks')
+  // 解析顺序：env > 环境块 > config 显式声明 > 本项目 .oneshot/console-port（控制台自登记）> 默认 7860
+  let sidecarUrl = process.env.ONESHOT_SIDECAR_URL
+    || envBlock?.sidecarUrl
+    || (manifest.config as any).sidecarUrl
+  if (!sidecarUrl) {
+    try {
+      const { readFileSync } = await import('node:fs')
+      const port = readFileSync(resolvePath(manifest.root, '.oneshot/console-port'), 'utf8').trim()
+      if (/^\d+$/.test(port)) sidecarUrl = `http://127.0.0.1:${port}`
+    } catch {}
+  }
+  sidecarUrl = (sidecarUrl ?? 'http://127.0.0.1:7860').replace(/\/$/, '')
+  const sidecarToken = getOrCreateSidecarToken(manifest.root)
+
+  // 上一次发布快照（hooks 过期清理与 prune 的所有权依据）；project 名先转义再进 filter 串
+  const escapedProject = config.name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const prevMeta = await pb.listRecords(
+    META_COLLECTION, `?filter=${encodeURIComponent(`project = "${escapedProject}"`)}&perPage=1`,
+  )
+  const prevSnapshot = prevMeta.items[0]?.snapshot
+  const prevServiceNames: string[] = prevSnapshot?.services?.map((s: any) => s.name) ?? []
+  const currentServiceNames = config.services.map((s) => s.name)
+
+  // auth 字段默认值：独立注入钩子（不进业务服务的作用域）
+  const authDefaults: Record<string, unknown> = {}
+  for (const [f, spec] of Object.entries(config.auth?.fields ?? {})) {
+    if (spec.options.default !== undefined) authDefaults[f] = spec.options.default
+  }
+  if (Object.keys(authDefaults).length) {
+    const authEntry = buildAuthDefaultsEntry(authCollectionName, authDefaults)
+    const authEntryPath = resolvePath(hooksDir, `${authCollectionName}.defaults.pb.js`)
+    await writeFile(authEntryPath, authEntry, 'utf8')
+    report.hooksFiles.push(authEntryPath)
+    log(`  ⚙ auth 默认值注入：${authCollectionName}（${Object.keys(authDefaults).join(', ')}）`)
+  }
+
+  for (const svc of config.services) {
+    const result = await compileServiceHooks(manifest, svc, hooksDir, { sidecarUrl, sidecarToken })
+    if (result) {
+      report.hooksFiles.push(...result.files)
+      log(`  ⚙ hooks 编译完成：${svc.name}（${result.files.length} 个文件）`)
+    }
+  }
+  const staleHooks = await pruneStaleHooks(hooksDir, prevServiceNames.filter((n) => !currentServiceNames.includes(n)))
+  for (const file of staleHooks) log(`  - 清理过期 hooks：${file.split('/').pop()}`)
+
   // 7) 快照写入 oneshot_meta（供控制台/CLI 读取）
   const snapshot = buildSnapshot(config)
   const hash = snapshotHash(snapshot)
@@ -390,10 +398,19 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
   }
 
   const metaBody = { project: config.name, snapshot: { ...snapshot, hash, publishedAt: report.publishedAt } }
-  if (prevMeta.items[0]) {
-    await pb.updateRecord(META_COLLECTION, prevMeta.items[0].id, metaBody)
-  } else {
-    await pb.createRecord(META_COLLECTION, metaBody)
+  // hooks 写入触发引擎热重载，meta 写入撞窗口时重试兜底
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if (prevMeta.items[0]) {
+        await pb.updateRecord(META_COLLECTION, prevMeta.items[0].id, metaBody)
+      } else {
+        await pb.createRecord(META_COLLECTION, metaBody)
+      }
+      break
+    } catch (err: any) {
+      if (attempt >= 2 || !/fetch failed|ECONNREFUSED/i.test(String(err?.message ?? err))) throw err
+      await new Promise((r) => setTimeout(r, 1200))
+    }
   }
 
   // 7) 客户端代码生成

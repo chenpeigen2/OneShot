@@ -116,6 +116,9 @@ export async function engineUp(opts: EngineUpOptions = {}): Promise<string> {
     '--http', `${host}:${port}`,
     '--dir', paths.dataDir,
     '--hooksDir', paths.hooksDir,
+    // 迁移目录隔离在 .oneshot 内：PB 默认用 <dataDir>/../pb_migrations（项目根），
+    // 历史 automigrate 会在"删 pb_data 重来"时重放，让旧 schema 转世（实测踩坑）
+    '--migrationsDir', resolve(paths.root, 'pb_migrations'),
   ], { detached: true, stdio: ['ignore', logFd, logFd] })
   child.unref()
   writeFileSync(paths.pidFile, String(child.pid))
