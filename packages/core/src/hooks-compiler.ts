@@ -142,7 +142,7 @@ ${pbHook}(function (e) {
     var info = null
     try { info = e.requestInfo() } catch (err) {}
     fn({
-      e: e, app: e.app, record: e.record, auth: e.auth,
+      e: e, app: e.app, record: e.record, auth: e.auth, coll: coll,
       query: info ? info.query : {}, body: info ? __normBody(info.body) : {},
       http: function (opts) { return $http.send(opts) },
       log: function (msg) { console.log('[oneshot:${svc.name}] ' + msg) },
