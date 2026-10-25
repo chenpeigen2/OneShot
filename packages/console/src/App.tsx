@@ -57,7 +57,11 @@ function LoginScreen({ onDone }: { onDone: () => void }) {
     <div className="flex h-full items-center justify-center">
       <form onSubmit={submit} className="w-96 rounded-2xl border border-zinc-800 bg-zinc-900 p-8 space-y-4">
         <div>
-          <h1 className="text-xl font-semibold">⚡ OneShot 控制台</h1>
+          <h1 className="flex items-center gap-2 text-xl font-semibold"><svg width="22" height="22" viewBox="0 0 240 240" aria-hidden="true">
+            <rect x="8" y="8" width="224" height="224" rx="52" fill="#0c0c0e"/>
+            <path d="M138 30 L64 130 h50 l-8 58 L180 96 h-50 l24 -66 z" fill="#f59e0b"/>
+            <circle cx="106" cy="206" r="12" fill="none" stroke="#f59e0b" stroke-width="5"/>
+          </svg><span>OneShot 控制台</span></h1>
           <p className="mt-1 text-sm text-zinc-400">连接 PocketBase 实例（超管账号）</p>
         </div>
         <label className="block text-sm">
@@ -684,7 +688,11 @@ export function App() {
     <div className="flex h-full flex-col">
       <header className="flex items-center justify-between border-b border-zinc-800 px-8 py-4">
         <div className="flex items-center gap-3">
-          <span className="text-lg font-semibold">⚡ OneShot</span>
+          <span className="flex items-center gap-2 text-lg font-semibold"><svg width="22" height="22" viewBox="0 0 240 240" aria-hidden="true">
+            <rect x="8" y="8" width="224" height="224" rx="52" fill="#0c0c0e"/>
+            <path d="M138 30 L64 130 h50 l-8 58 L180 96 h-50 l24 -66 z" fill="#f59e0b"/>
+            <circle cx="106" cy="206" r="12" fill="none" stroke="#f59e0b" stroke-width="5"/>
+          </svg><span>OneShot</span></span>
           <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">{pbUrl()}</span>
           <span className="rounded-full bg-amber-950 px-2 py-0.5 text-xs text-amber-400">控制台</span>
         </div>

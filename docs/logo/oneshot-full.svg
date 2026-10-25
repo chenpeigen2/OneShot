@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 240" width="980" height="240">
+  <defs>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fcd34d"/>
+      <stop offset="0.55" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#18181b"/>
+      <stop offset="1" stop-color="#09090b"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- 图标 -->
+  <rect x="8" y="8" width="224" height="224" rx="52" fill="url(#bg)"/>
+  <rect x="8.75" y="8.75" width="222.5" height="222.5" rx="51.25" fill="none" stroke="#27272a" stroke-width="1.5"/>
+  <path d="M138 30 L64 130 h50 l-8 58 L180 96 h-50 l24 -66 z" fill="url(#bolt)" filter="url(#glow)"/>
+  <circle cx="106" cy="206" r="12" fill="none" stroke="#f59e0b" stroke-width="5"/>
+  <circle cx="106" cy="206" r="4" fill="#fcd34d"/>
+
+  <!-- 字标 -->
+  <text x="268" y="140" font-family="-apple-system, 'Helvetica Neue', 'PingFang SC', 'Segoe UI', sans-serif"
+        font-size="112" font-weight="800" fill="#fafafa" letter-spacing="-2">OneShot</text>
+
+  <!-- 标语 -->
+  <text x="272" y="196" font-family="-apple-system, 'Helvetica Neue', 'PingFang SC', 'Segoe UI', sans-serif"
+        font-size="26" font-weight="500" fill="#a1a1aa" letter-spacing="6">基于 PocketBase · 发布即服务</text>
+</svg>

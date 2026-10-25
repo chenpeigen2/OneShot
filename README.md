@@ -1,4 +1,7 @@
-# OneShot ⚡
+<p align="center">
+  <img src="docs/logo/oneshot-full.svg" alt="OneShot" width="640" />
+</p>
+
 
 **基于 [PocketBase](https://github.com/pocketbase/pocketbase) 的自托管服务发布/生成框架。**
 
