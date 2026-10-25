@@ -171,7 +171,8 @@ export function buildTsClient(config: OneshotConfig, outDir: string): TsGenResul
   reactLines.push(`  const reload = useCallback(async () => {`)
   reactLines.push(`    setLoading(true)`)
   reactLines.push(`    try {`)
-  reactLines.push(`      const res = await pb.collection(collection).getList<T>(page, perPage, JSON.parse(optionsKey))`)
+  reactLines.push(`      // requestKey: null —— 禁用 SDK autoCancel：多个 useRecords 并发时避免互相取消
+      const res = await pb.collection(collection).getList<T>(page, perPage, { ...JSON.parse(optionsKey), requestKey: null })`)
   reactLines.push(`      setItems(res.items)`)
   reactLines.push(`      setTotal(res.totalItems)`)
   reactLines.push(`      setError(null)`)
