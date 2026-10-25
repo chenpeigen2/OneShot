@@ -134,7 +134,23 @@ export function serializeConfig(config: OneshotConfig): string {
   if (config.auth) {
     const authParts = [`collection: ${value(config.auth.collection ?? 'users')}`]
     if (config.auth.signup !== undefined) authParts.push(`signup: ${value(config.auth.signup)}`)
-    lines.push(`  auth: { ${authParts.join(', ')} },`)
+    let authBlock = `  auth: { ${authParts.join(', ')} }`
+    if (config.auth.fields && Object.keys(config.auth.fields).length) {
+      lines.push(`  auth: {`)
+      lines.push(`    collection: ${value(config.auth.collection ?? 'users')},`)
+      if (config.auth.signup !== undefined) lines.push(`    signup: ${value(config.auth.signup)},`)
+      lines.push('    fields: {')
+      for (const [fieldName, spec] of Object.entries(config.auth.fields)) {
+        lines.push(`      ${serializeField(fieldName, spec)}`)
+      }
+      lines.push('    },')
+      if (config.auth.listRule !== undefined) lines.push(`    listRule: ${value(config.auth.listRule)},`)
+      if (config.auth.viewRule !== undefined) lines.push(`    viewRule: ${value(config.auth.viewRule)},`)
+      if (config.auth.updateRule !== undefined) lines.push(`    updateRule: ${value(config.auth.updateRule)},`)
+      lines.push(`  },`)
+    } else {
+      lines.push(authBlock + ',')
+    }
   }
   lines.push('')
   lines.push('  services: [')

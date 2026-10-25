@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import type { CollectionDef, OneshotConfig } from './schema.js'
 import {
   buildAuthCollectionCreate,
@@ -12,7 +13,7 @@ import {
   type PbCollection,
   type PbField,
 } from './pb-mapping.js'
-import { compileServiceHooks, pruneStaleHooks } from './hooks-compiler.js'
+import { buildAuthDefaultsEntry, compileServiceHooks, pruneStaleHooks } from './hooks-compiler.js'
 import { generateClients } from './codegen/index.js'
 import { getOrCreateSidecarToken } from './sidecar.js'
 import type { ResolvedManifest } from './manifest.js'
@@ -189,10 +190,14 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
     log(`  ~ collection ${name} 已更新`)
   }
 
-  // 1) auth collection（先建，relation 依赖它）
-  if (config.auth) {
-    const signup = config.auth.signup ?? 'public'
-    const authBody = buildAuthCollectionCreate(authCollectionName, signup) as Record<string, unknown>
+  // 1) auth collection（先建，relation 依赖它）—— 始终 ensure（缺 config.auth 也要保证 users 存在，relation 依赖）
+  {
+    const signup = config.auth?.signup ?? 'public'
+    const authBody = buildAuthCollectionCreate(authCollectionName, signup, config.auth?.fields, {
+      listRule: config.auth?.listRule,
+      viewRule: config.auth?.viewRule,
+      updateRule: config.auth?.updateRule,
+    }) as Record<string, unknown>
     const { passwordAuth, ...authDesired } = authBody
     await ensureCollection(authCollectionName, authDesired as any, { passwordAuth })
   }
@@ -297,6 +302,19 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
   const prevSnapshot = prevMeta.items[0]?.snapshot
   const prevServiceNames: string[] = prevSnapshot?.services?.map((s: any) => s.name) ?? []
   const currentServiceNames = config.services.map((s) => s.name)
+
+  // auth 字段默认值：独立注入钩子（不进业务服务的作用域）
+  const authDefaults: Record<string, unknown> = {}
+  for (const [f, spec] of Object.entries(config.auth?.fields ?? {})) {
+    if (spec.options.default !== undefined) authDefaults[f] = spec.options.default
+  }
+  if (Object.keys(authDefaults).length) {
+    const authEntry = buildAuthDefaultsEntry(authCollectionName, authDefaults)
+    const authEntryPath = resolvePath(hooksDir, `${authCollectionName}.defaults.pb.js`)
+    await writeFile(authEntryPath, authEntry, 'utf8')
+    report.hooksFiles.push(authEntryPath)
+    log(`  ⚙ auth 默认值注入：${authCollectionName}（${Object.keys(authDefaults).join(', ')}）`)
+  }
 
   for (const svc of config.services) {
     const result = await compileServiceHooks(manifest, svc, hooksDir, { sidecarUrl, sidecarToken })

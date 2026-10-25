@@ -204,6 +204,27 @@ routerAdd(${JSON.stringify(method)}, ${JSON.stringify(route)}, function (e) {
   return lines.join('\n')
 }
 
+/**
+ * auth collection 自定义字段的默认值注入（独立入口，不与业务服务钩子混合）。
+ * 生成 <auth>.defaults.pb.js：onRecordValidate 只对该 auth collection 触发、
+ * 只做默认值回填（不调用任何用户钩子）。
+ */
+export function buildAuthDefaultsEntry(authCollection: string, defaults: Record<string, unknown>): string {
+  return `// 由 oneshot publish 生成（auth 字段默认值注入），请勿手改
+onRecordValidate(function (e) {
+  var coll = e.record.collection().name
+  if (coll !== ${JSON.stringify(authCollection)}) { e.next(); return }
+  var d = ${JSON.stringify(defaults)}
+  if (e.record.isNew && e.record.isNew()) {
+    for (var k in d) {
+      var v = e.record.get(k)
+      if (v === '' || v === undefined || v === null) e.record.set(k, d[k])
+    }
+  }
+  e.next()
+})`
+}
+
 export interface HooksCompileOptions {
   sidecarUrl?: string
   sidecarToken?: string

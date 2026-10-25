@@ -228,19 +228,30 @@ export function collectionSatisfied(existing: PbCollection, desired: {
 
 // ---------- auth collection ----------
 
-export function buildAuthCollectionCreate(name: string, signup: 'public' | 'authenticated' | 'superuser'): Record<string, unknown> {
+export function buildAuthCollectionCreate(
+  name: string,
+  signup: 'public' | 'authenticated' | 'superuser',
+  customFields: Record<string, FieldSpec> = {},
+  rules: { listRule?: string; viewRule?: string; updateRule?: string } = {},
+): Record<string, unknown> {
   const createRule = signup === 'public' ? '' : signup === 'authenticated' ? '@request.auth.id != ""' : null
+  // 自定义字段合并（系统字段 name/avatar 之后）；password/email 等由 PB 系统管理，禁止覆盖
+  const systemOnly = new Set(['id', 'password', 'tokenKey', 'email', 'emailVisibility', 'verified'])
+  const extra = Object.entries(customFields)
+    .filter(([fieldName]) => !systemOnly.has(fieldName))
+    .map(([fieldName, spec]) => fieldToJson(fieldName, spec))
   return {
     name,
     type: 'auth',
     fields: [
       { type: 'text', name: 'name', presentable: true },
       { type: 'file', name: 'avatar', maxSelect: 1, mimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] },
+      ...extra,
     ],
-    listRule: '@request.auth.id != "" && id = @request.auth.id',
-    viewRule: '@request.auth.id != "" && id = @request.auth.id',
+    listRule: rules.listRule ?? '@request.auth.id != "" && id = @request.auth.id',
+    viewRule: rules.viewRule ?? '@request.auth.id != "" && id = @request.auth.id',
     createRule,
-    updateRule: '@request.auth.id != "" && id = @request.auth.id',
+    updateRule: rules.updateRule ?? '@request.auth.id != "" && id = @request.auth.id',
     deleteRule: null,
     passwordAuth: { enabled: true, identityFields: ['email'] },
   }

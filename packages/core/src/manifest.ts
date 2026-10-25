@@ -37,6 +37,17 @@ export function validateConfig(config: OneshotConfig, root: string): void {
   }
   if (!Array.isArray(config.services) || config.services.length === 0) fail('至少需要一个 service')
   if (config.baseUrl && !/^https?:\/\//.test(config.baseUrl)) fail(`baseUrl 必须以 http(s) 开头：${config.baseUrl}`)
+  if (config.auth?.fields) {
+    const systemOnly = new Set(['id', 'password', 'tokenKey', 'email', 'emailVisibility', 'verified'])
+    for (const [fieldName, spec] of Object.entries(config.auth.fields)) {
+      if (systemOnly.has(fieldName)) fail(`auth 字段 "${fieldName}" 是系统字段，不可自定义`)
+      if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(fieldName)) {
+        fail(`auth 字段名 "${fieldName}" 非法：需以字母开头，只含字母/数字/下划线`)
+      }
+      if (!FIELD_KINDS.includes(spec.kind)) fail(`auth 字段 "${fieldName}" 未知类型 "${spec.kind}"`)
+      if (spec.kind === 'select' && !spec.options.values?.length) fail(`auth select 字段 ${fieldName} 必须提供 values`)
+    }
+  }
 
   const seenServices = new Set<string>()
   for (const svc of config.services) {

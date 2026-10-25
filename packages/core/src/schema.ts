@@ -165,6 +165,20 @@ export interface AuthSpec {
   collection?: string
   /** 注册开放度，默认 'public' */
   signup?: 'public' | 'authenticated' | 'superuser'
+  /**
+   * auth collection 的自定义字段（如角色 role、姓名 name、电话 phone）。
+   * 发布时合并进 users；角色字段配合 rules 的原生 filter 实现 RBAC
+   * （如 @request.auth.role = "librarian"）。password/email 等系统字段不可覆盖。
+   */
+  fields?: Record<string, FieldSpec>
+  /**
+   * 自定义访问规则（原生 PB filter）。默认安全值：仅本人可见/可改。
+   * 例（管理员可见全部、可管理他人）：listRule/viewRule 设为
+   * 'id = @request.auth.id || @request.auth.role = "librarian"'
+   */
+  listRule?: string
+  viewRule?: string
+  updateRule?: string
 }
 
 export interface ClientsSpec {
