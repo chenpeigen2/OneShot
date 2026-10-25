@@ -1,0 +1,8 @@
+{
+  "name": "hello-demo",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@oneshot/core": "*"
+  }
+}
