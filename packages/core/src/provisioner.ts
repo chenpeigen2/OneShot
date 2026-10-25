@@ -15,7 +15,7 @@ import {
 } from './pb-mapping.js'
 import { buildAuthDefaultsEntry, compileServiceHooks, pruneStaleHooks } from './hooks-compiler.js'
 import { generateClients } from './codegen/index.js'
-import { getOrCreateSidecarToken } from './sidecar.js'
+import { ensureServiceAccount, getOrCreateSidecarToken } from './sidecar.js'
 import type { ResolvedManifest } from './manifest.js'
 
 // ---------- PB Admin API 客户端 ----------
@@ -284,6 +284,15 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
       report.updated.push(collName)
       log(`  ~ collection ${collName} 已更新`)
     }
+  }
+
+  // 4.5) 系统服务账号（sidecar 系统级操作凭据）：在 hooks 写入前执行，
+  //      避开 hooks 文件变化触发的引擎热重载窗口
+  try {
+    await ensureServiceAccount(pb, authCollectionName, manifest.root)
+    log('  ⚙ 系统服务账号就绪（impersonate token 已缓存）')
+  } catch (err: any) {
+    log(`  ⚠ 服务账号不可用（sidecar 系统级操作将受限）：${err?.message ?? err}`)
   }
 
   // 5) hooks 编译（默认 <项目根>/pb_hooks —— 与 `oneshot engine up` 的 --hooksDir 一致）

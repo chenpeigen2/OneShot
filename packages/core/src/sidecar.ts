@@ -42,6 +42,8 @@ export interface SidecarCtx {
   auth: { id: string } | null
   /** 当前用户的 PB auth token（转发自原始请求，规则与身份原样生效） */
   token: string
+  /** 系统服务账号 token（副本流转/罚款结算等系统级写操作专用；librarian 角色） */
+  systemToken: string
   pbUrl: string
   query: Record<string, any>
   body: Record<string, any>
@@ -106,7 +108,7 @@ export async function handleSidecarRequest(
   registry: SidecarRegistry,
   req: import('node:http').IncomingMessage,
   res: import('node:http').ServerResponse,
-  opts: { token: string; pbUrl: string },
+  opts: { token: string; pbUrl: string; systemToken?: string },
 ): Promise<SidecarRequestResult> {
   const url = new URL(req.url ?? '/', 'http://local')
   const parts = url.pathname.split('/').filter(Boolean)
@@ -166,6 +168,7 @@ export async function handleSidecarRequest(
       action: parts[2],
       auth: payload.auth ?? null,
       token: payload.token ?? '',
+      systemToken: opts.systemToken ?? '',
       pbUrl: opts.pbUrl,
       query: payload.query ?? {},
       body: (payload.body as Record<string, any>) ?? {},
@@ -177,6 +180,48 @@ export async function handleSidecarRequest(
     send(status, { error: err?.message ?? String(err) })
     return { handled: true, status }
   }
+}
+
+
+const SERVICE_EMAIL = 'oneshot-service@system.local'
+
+/** 确保系统服务账号存在并返回长效 impersonate token（sidecar 的系统级操作凭据：
+ *  副本状态流转、罚款结算等读者无权直改、但业务动作必须执行的写操作）。
+ *  账号 role 由调用方（provisioner）以超管身份设置为 librarian。 */
+export async function ensureServiceAccount(
+  pb: { request: (m: string, p: string, b?: unknown) => Promise<any>; listRecords: (c: string, q?: string) => Promise<any>; createRecord: (c: string, b: unknown) => Promise<any>; updateRecord: (c: string, id: string, b: unknown) => Promise<any> },
+  authCollection: string,
+  root: string,
+): Promise<string> {
+  const exists = await pb.listRecords(authCollection, `?filter=${encodeURIComponent(`email = "${SERVICE_EMAIL}"`)}&perPage=1`)
+  let id: string = exists.items?.[0]?.id
+  if (!id) {
+    const created = await pb.createRecord(authCollection, {
+      email: SERVICE_EMAIL, password: cryptoRandom(24), passwordConfirm: undefined, role: 'librarian', blocked: false,
+    } as any).catch(async () => {
+      // auth collection 注册可能要求 passwordConfirm
+      const pwd = cryptoRandom(24)
+      return pb.createRecord(authCollection, { email: SERVICE_EMAIL, password: pwd, passwordConfirm: pwd, role: 'librarian', blocked: false } as any)
+    })
+    id = created.id
+  } else {
+    await pb.updateRecord(authCollection, id, { role: 'librarian', blocked: false }).catch(() => {})
+  }
+  const imp = await pb.request('POST', `/api/collections/${authCollection}/impersonate/${id}`, { duration: 31536000 })
+  const token = imp.token as string
+  writeFileSync(resolve(root, '.oneshot/service-account-token'), token, { mode: 0o600 })
+  return token
+}
+
+/** 读取 service account token（控制服务器每次请求时读，热更新） */
+export function readServiceAccountToken(root: string): string {
+  try {
+    return String(readFileSync(resolve(root, '.oneshot/service-account-token'), 'utf8')).trim()
+  } catch { return '' }
+}
+
+function cryptoRandom(n: number): string {
+  return randomBytes(n).toString('hex')
 }
 
 export function hasSidecarActions(config: OneshotConfig): boolean {

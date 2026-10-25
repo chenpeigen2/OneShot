@@ -131,9 +131,14 @@ ${pbHook}(function (e) {
   var d = ${JSON.stringify(defaults)}[coll]
   // 只在创建时回填默认值：update 时用户显式清空的字段不能被默认值悄悄盖回去
   if (d && e.record.isNew()) {
+    var info0 = null
+    try { info0 = e.requestInfo() } catch (err0) {}
+    var body0 = info0 && info0.body ? info0.body : {}
     for (var k in d) {
       var v = e.record.get(k)
-      if (v === '' || v === undefined || v === null) e.record.set(k, d[k])
+      // PB number/bool 未设值时 get 返回零值（0/false）：仅当请求未显式提供时才回填默认
+      var zero0 = (v === 0 || v === false) && body0[k] === undefined
+      if (v === '' || v === undefined || v === null || zero0) e.record.set(k, d[k])
     }
   }` : ''}
   var u = require(__hooks + ${JSON.stringify('/' + group.moduleName)})
@@ -216,9 +221,14 @@ onRecordValidate(function (e) {
   if (coll !== ${JSON.stringify(authCollection)}) { e.next(); return }
   var d = ${JSON.stringify(defaults)}
   if (e.record.isNew && e.record.isNew()) {
+    var info = null
+    try { info = e.requestInfo() } catch (err) {}
+    var body = info && info.body ? info.body : {}
     for (var k in d) {
       var v = e.record.get(k)
-      if (v === '' || v === undefined || v === null) e.record.set(k, d[k])
+      // PB number/bool 未设值时 get 返回零值（0/false）：仅当请求未显式提供时才回填默认
+      var zero = (v === 0 || v === false) && body[k] === undefined
+      if (v === '' || v === undefined || v === null || zero) e.record.set(k, d[k])
     }
   }
   e.next()
