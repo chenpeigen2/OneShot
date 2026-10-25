@@ -10,3 +10,4 @@ examples/*/.env
 
 # 生成产物默认会写到 web/src/api、mobile/lib/api，是否入库由团队决定
 .DS_Store
+tests/.tmp/
