@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <linearGradient id="boltA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fcd34d"/>
+      <stop offset="1" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 靶心（同心环） -->
+  <circle cx="98" cy="142" r="92" fill="none" stroke="#f59e0b" stroke-width="18"/>
+  <circle cx="98" cy="142" r="54" fill="none" stroke="#3f3f46" stroke-width="16"/>
+  <circle cx="98" cy="142" r="22" fill="#fbbf24"/>
+
+  <!-- 闪电：从右上大角度切入靶心，尖端落在圆心 -->
+  <path d="M232 0 L118 108 h48 l-68 60 36 -52 h-46 z"
+        fill="url(#boltA)" stroke="#0a0a0b" stroke-width="11" stroke-linejoin="round"/>
+</svg>
