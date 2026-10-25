@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  createBackup,
+  deleteBackup,
+  downloadBackup,
+  fetchBackups,
   fetchCollections,
   fetchManifest,
   fetchMeta,
@@ -9,12 +13,13 @@ import {
   login,
   logout,
   pbUrl,
+  restoreBackup,
   saveManifest,
   type MetaRecord,
   type PbCollection,
 } from './api'
 
-type View = { kind: 'dashboard' } | { kind: 'records'; collection: PbCollection } | { kind: 'editor'; service: string }
+type View = { kind: 'dashboard' } | { kind: 'records'; collection: PbCollection } | { kind: 'editor'; service: string } | { kind: 'backups' }
 
 const FIELD_KINDS = ['text', 'number', 'bool', 'email', 'url', 'date', 'select', 'json', 'file', 'relation', 'editor', 'geoPoint']
 const RULE_KEYS = ['list', 'view', 'create', 'update', 'delete']
@@ -280,7 +285,60 @@ function RecordsView({ collection, onBack }: { collection: PbCollection; onBack:
   )
 }
 
+
 const inputCls = 'rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm outline-none focus:border-amber-500'
+
+function BackupsView({ onBack }: { onBack: () => void }) {
+  const [items, setItems] = useState<any[]>([])
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [name, setName] = useState('')
+
+  const load = useCallback(() => {
+    setError('')
+    fetchBackups().then((r) => setItems(Array.isArray(r) ? r : [])).catch((e) => setError(e?.message ?? String(e)))
+  }, [])
+  useEffect(load, [load])
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true); setError('')
+    try { await fn(); load() } catch (err: any) { setError(err?.message ?? String(err)) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mx-auto max-w-4xl p-8">
+      <div className="flex items-center gap-4">
+        <button onClick={onBack} className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:border-amber-600">← 返回</button>
+        <h2 className="text-lg font-semibold">备份</h2>
+        <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">PB 原生 backups</span>
+      </div>
+      <p className="mt-2 text-xs text-zinc-500">恢复会重启 PocketBase（短暂不可用），恢复到更早的备份会丢失其后的数据。</p>
+
+      {error && <p className="mt-4 rounded-lg bg-red-950/60 px-3 py-2 text-sm text-red-300">{error}</p>}
+
+      <div className="mt-4 flex items-center gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="备份名（字母/数字/下划线，自动补 .zip；留空自动时间戳）" className={`${inputCls} w-72 font-mono`} />
+        <button disabled={busy} onClick={() => run(() => createBackup(name.trim() || undefined))} className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-zinc-950 hover:bg-amber-400 disabled:opacity-50">+ 创建备份</button>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {items.map((b) => (
+          <div key={b.key} className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm">
+            <span className="font-mono text-amber-400">{b.key}</span>
+            <span className="text-zinc-500">{(b.size / 1024).toFixed(1)} KB · {new Date(b.modified).toLocaleString()}</span>
+            <div className="ml-auto flex gap-2">
+              <button onClick={() => run(() => downloadBackup(b.key))} className="text-xs text-zinc-400 hover:text-amber-400">下载</button>
+              <button disabled={busy} onClick={() => { if (confirm(`确认恢复 ${b.key}？PB 将重启且其后的数据丢失。`)) run(() => restoreBackup(b.key)) }} className="text-xs text-zinc-400 hover:text-amber-400">恢复</button>
+              <button disabled={busy} onClick={() => { if (confirm(`确认删除备份 ${b.key}？`)) run(() => deleteBackup(b.key)) }} className="text-xs text-zinc-500 hover:text-red-400">删除</button>
+            </div>
+          </div>
+        ))}
+        {items.length === 0 && !error && <p className="mt-6 text-center text-sm text-zinc-500">还没有备份</p>}
+      </div>
+    </div>
+  )
+}
+
 
 function EditorView({ config, serviceName, onBack, onSaved }: {
   config: any
@@ -358,7 +416,33 @@ function EditorView({ config, serviceName, onBack, onSaved }: {
     })
   }
 
+
   const [newCollName, setNewCollName] = useState('')
+
+  const setAction = (name: string, patch: any) => {
+    setDraft((d: any) => ({ ...d, actions: { ...d.actions, [name]: { ...(d.actions?.[name] ?? {}), ...patch } } }))
+  }
+  const renameAction = (oldName: string, newName: string) => {
+    if (!/^[a-z][a-zA-Z0-9_]*$/.test(newName) && newName !== '') { setError('action 名需以小写字母开头'); return }
+    setDraft((d: any) => {
+      const actions: any = {}
+      for (const [n, v] of Object.entries(d.actions ?? {})) actions[n === oldName ? (newName || n) : n] = v
+      return { ...d, actions }
+    })
+  }
+  const addAction = () => {
+    let n = 'newAction'
+    let i = 1
+    while (draft.actions?.[n]) n = `newAction${i++}`
+    setAction(n, { method: 'GET', rule: 'authenticated', runtime: 'jsvm', handler: './hooks/tasks.ts#handler' })
+  }
+  const deleteAction = (name: string) => {
+    setDraft((d: any) => {
+      const actions = { ...d.actions }
+      delete actions[name]
+      return { ...d, actions }
+    })
+  }
 
   const addCollection = () => {
     const name = newCollName.trim()
@@ -502,6 +586,38 @@ function EditorView({ config, serviceName, onBack, onSaved }: {
               ))}
             </div>
           </div>
+
+          <div className="mt-4 border-t border-zinc-800 pt-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-zinc-500">自定义 actions（handler 文件需已存在；runtime: sidecar 由控制服务器承载）</span>
+              <button onClick={() => addAction()} className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs hover:border-amber-600">+ 添加 action</button>
+            </div>
+            <div className="mt-2 space-y-2">
+              {Object.entries(draft.actions ?? {}).map(([actionName, a]: [string, any]) => (
+                <div key={actionName} className="flex flex-wrap items-center gap-2">
+                  <input value={actionName} onChange={(e) => renameAction(actionName, e.target.value)} className={`${inputCls} w-32 font-mono text-xs`} title="action 名" />
+                  <select value={a.method ?? 'POST'} onChange={(e) => setAction(actionName, { method: e.target.value })} className={`${inputCls} text-xs`}>
+                    {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <select value={a.rule ?? 'authenticated'} onChange={(e) => setAction(actionName, { rule: e.target.value })} className={`${inputCls} text-xs`}>
+                    {['public', 'authenticated', 'superuser'].map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                  <select value={a.runtime ?? 'jsvm'} onChange={(e) => setAction(actionName, { runtime: e.target.value })} className={`${inputCls} text-xs`}>
+                    <option value="jsvm">jsvm</option>
+                    <option value="sidecar">sidecar</option>
+                  </select>
+                  <input value={a.handler ?? ''} onChange={(e) => setAction(actionName, { handler: e.target.value })} placeholder="./hooks/tasks.ts#handler" className={`${inputCls} w-64 font-mono text-xs`} />
+                  <button onClick={() => deleteAction(actionName)} className="text-xs text-zinc-500 hover:text-red-400">删除</button>
+                </div>
+              ))}
+              {Object.keys(draft.actions ?? {}).length === 0 && <p className="text-xs text-zinc-600">暂无 action</p>}
+            </div>
+          </div>
+
+          <div className="mt-4 border-t border-zinc-800 pt-4">
+            <label className="text-xs text-zinc-500 block">服务级 hooks 文件（作用于全部 collections；留空 = 无）</label>
+            <input value={draft.hooks ?? ''} onChange={(e) => setDraft((d: any) => ({ ...d, hooks: e.target.value || undefined }))} placeholder="./hooks/tasks.ts" className={`${inputCls} mt-1 w-72 font-mono text-xs`} />
+          </div>
         </section>
       ))}
 
@@ -550,6 +666,7 @@ export function App() {
           <span className="rounded-full bg-amber-950 px-2 py-0.5 text-xs text-amber-400">控制台</span>
         </div>
         <div className="flex items-center gap-3">
+          <button onClick={() => setView({ kind: 'backups' })} className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:border-amber-600">备份</button>
           <button onClick={refresh} className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:border-amber-600">刷新</button>
           <button onClick={() => { logout(); setAuthed(false); setView({ kind: 'dashboard' }) }} className="text-sm text-zinc-500 hover:text-zinc-300">断开</button>
         </div>
@@ -568,6 +685,7 @@ export function App() {
         {view.kind === 'records' && (
           <RecordsView collection={view.collection} onBack={() => setView({ kind: 'dashboard' })} />
         )}
+        {view.kind === 'backups' && <BackupsView onBack={() => setView({ kind: 'dashboard' })} />}
         {view.kind === 'editor' && manifest && (
           <EditorView
             config={manifest}

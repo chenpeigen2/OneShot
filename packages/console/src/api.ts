@@ -95,6 +95,44 @@ async function ctrl<T = any>(path: string, opts: { method?: string; body?: unkno
 
 export const fetchManifest = () => ctrl<{ config: any; path: string }>('/api/manifest')
 
+// ---------- 备份（PB 原生 backups API，超管） ----------
+
+export const fetchBackups = () => pb<any[]>('/api/backups')
+
+export const createBackup = (name?: string) => {
+  const clean = name?.replace(/[^\w]+/g, '_').replace(/^_+|_+$/g, '')
+  const finalName = clean ? `${clean}.zip` : undefined
+  return pb('/api/backups', { method: 'POST', body: finalName ? { name: finalName } : {} })
+}
+
+export async function deleteBackup(name: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/backups/${encodeURIComponent(name)}`, {
+    method: 'DELETE', headers: token ? { Authorization: token } : {},
+  })
+  if (!res.ok) throw new Error(`删除失败（HTTP ${res.status}）`)
+}
+
+export async function restoreBackup(name: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/backups/${encodeURIComponent(name)}/restore`, {
+    method: 'POST', headers: token ? { Authorization: token } : {},
+  })
+  if (!res.ok) throw new Error(`恢复失败（HTTP ${res.status}）—— 恢复会重启 PB，稍后刷新`)
+}
+
+export async function downloadBackup(name: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/backups/${encodeURIComponent(name)}`, {
+    headers: token ? { Authorization: token } : {},
+  })
+  if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name.endsWith('.zip') ? name : name + '.zip'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export const saveManifest = (config: any) =>
   ctrl<{ report: { created: string[]; updated: string[]; unchanged: string[]; pruned: string[]; hooksFiles: string[]; clientsDirs: string[]; snapshotHash: string } }>(
     '/api/manifest',
