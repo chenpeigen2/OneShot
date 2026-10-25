@@ -24,6 +24,28 @@ const CTRL = process.env.TEST_CTRL || 'http://127.0.0.1:7861'
 const badToken = await fetch(CTRL + '/sidecar/tasks/summary').then((r) => r.status)
 assert('sidecar: 直接访问 /sidecar/* 无 token 被拒', badToken === 401, `status=${badToken}`)
 
+// sidecar 直访边界：未知 action 404、>1MB 413、非 JSON 415、合法 token 正向 200
+const { readFileSync } = await import('node:fs')
+const { join } = await import('node:path')
+const sidecarToken = readFileSync(join(process.env.TEST_FIXTURE_DIR ?? 'tests/.tmp/project', '.oneshot', 'sidecar-token'), 'utf8').trim()
+const HSC = { 'Content-Type': 'application/json', Authorization: `Bearer ${sidecarToken}` }
+
+const unknownAction = await fetch(CTRL + '/sidecar/tasks/definitely-not-an-action', { method: 'POST', headers: HSC, body: '{}' }).then((r) => r.status)
+assert('sidecar: 直访未知 action 404', unknownAction === 404, `status=${unknownAction}`)
+
+const tooBigSidecar = await fetch(CTRL + '/sidecar/tasks/summary', {
+  method: 'POST', headers: HSC, body: JSON.stringify({ body: { _pad: 'A'.repeat(1024 * 1024 + 64) } }),
+}).then((r) => r.status)
+assert('sidecar: 直访 >1MB 被 413 拒绝', tooBigSidecar === 413, `status=${tooBigSidecar}`)
+
+const wrongCTSidecar = await fetch(CTRL + '/sidecar/tasks/summary', {
+  method: 'POST', headers: { ...HSC, 'Content-Type': 'text/plain' }, body: 'x'.repeat(512 * 1024),
+}).then((r) => r.status)
+assert('sidecar: 直访 text/plain 被 415 拒绝', wrongCTSidecar === 415, `status=${wrongCTSidecar}`)
+
+const directOk = await fetch(CTRL + '/sidecar/tasks/summary', { method: 'POST', headers: HSC, body: '{}' }).then((r) => r.json())
+assert('sidecar: 直访合法 token 执行成功', directOk?.marker === 'from-sidecar', JSON.stringify(directOk))
+
 // realtime：订阅 → 创建 → 收到事件
 const pb = new PocketBase(PB)
 const login = await j(PB, 'POST', '/api/collections/users/auth-with-password', { identity: a.email, password: '1234567890' })

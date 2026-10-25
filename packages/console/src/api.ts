@@ -31,9 +31,15 @@ export async function login(url: string, email: string, password: string): Promi
   sessionStorage.setItem('oneshot_pb_token', token)
 }
 
-async function pb<T = any>(path: string): Promise<T> {
+async function pb<T = any>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, {
-    headers: token ? { Authorization: token } : {},
+    method: opts.method ?? 'GET',
+    headers: {
+      ...(token ? { Authorization: token } : {}),
+      // 带 body 的请求（如创建备份 POST /api/backups）必须声明 JSON 类型
+      ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => null)
@@ -64,7 +70,7 @@ export interface MetaRecord {
       title?: string
       hasHooks: boolean
       collections: { name: string; fields: string[] }[]
-      actions: { name: string; method: string; route: string }[]
+      actions: { name: string; method: string; route: string; runtime?: string }[]
     }[]
   }
 }
@@ -104,7 +110,6 @@ export const createBackup = (name?: string) => {
   const finalName = clean ? `${clean}.zip` : undefined
   return pb('/api/backups', { method: 'POST', body: finalName ? { name: finalName } : {} })
 }
-
 export async function deleteBackup(name: string): Promise<void> {
   const res = await fetch(`${baseUrl}/api/backups/${encodeURIComponent(name)}`, {
     method: 'DELETE', headers: token ? { Authorization: token } : {},

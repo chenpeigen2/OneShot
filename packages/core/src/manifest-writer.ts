@@ -1,4 +1,5 @@
 import type { FieldSpec, OneshotConfig } from './schema.js'
+import { FIELD_KINDS } from './pb-mapping.js'
 
 /**
  * 配置对象 -> 可读的 oneshot.config.ts 源码（控制台编辑写回用）。
@@ -6,8 +7,6 @@ import type { FieldSpec, OneshotConfig } from './schema.js'
  * （e2e 有"写回后再次 publish 全部 unchanged"的幂等断言兜底）。
  * 注意：文件里的注释与手工排版会在写回时丢失（.bak 备份上一版）。
  */
-
-const FIELD_KINDS = ['text', 'number', 'bool', 'email', 'url', 'date', 'select', 'json', 'file', 'relation', 'editor', 'geoPoint'] as const
 
 const OPTION_ORDER = [
   'required', 'presentable', 'min', 'max', 'pattern', 'onlyInt',
@@ -140,7 +139,9 @@ export function serializeConfig(config: OneshotConfig): string {
     for (const [envName, env] of Object.entries(config.environments)) {
       const parts = [`baseUrl: ${value(env.baseUrl)}`]
       if (env.sidecarUrl !== undefined) parts.push(`sidecarUrl: ${value(env.sidecarUrl)}`)
-      lines.push(`    ${envName}: { ${parts.join(', ')} },`)
+      // 非 TS 标识符的键（如 'prod-1'）必须加引号，否则写回的文件无法重新加载
+      const key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(envName) ? envName : q(envName)
+      lines.push(`    ${key}: { ${parts.join(', ')} },`)
     }
     lines.push('  },')
   }

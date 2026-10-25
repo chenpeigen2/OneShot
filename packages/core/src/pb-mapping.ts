@@ -86,12 +86,13 @@ export function resolveRules(
 export function fieldToJson(name: string, spec: FieldSpec, collectionId?: string): PbField {
   const o = spec.options
   const json: PbField = { type: spec.kind, name, required: !!o.required }
+  // presentable 对所有字段类型生效（text 之外的类型也能声明展示主字段）
+  json.presentable = o.presentable
   switch (spec.kind) {
     case 'text':
       json.min = o.min
       json.max = o.max
       json.pattern = o.pattern
-      json.presentable = o.presentable
       break
     case 'number':
       json.min = o.min
@@ -166,24 +167,7 @@ export function buildFields(def: CollectionDef, collectionIdOf: (name: string) =
   return { plain, relations, defaults }
 }
 
-// ---------- collection 请求体 ----------
-
-export function buildCollectionCreate(
-  name: string,
-  def: CollectionDef,
-  ctx: { authCollectionName: string; collectionIdOf: (name: string) => string | undefined },
-): { body: Record<string, unknown>; defaults: Record<string, unknown> } {
-  const ownerField = findOwnerField(def, ctx.authCollectionName)
-  const { plain, defaults } = buildFields(def, ctx.collectionIdOf)
-  const body: Record<string, unknown> = {
-    name,
-    type: 'base',
-    fields: plain,
-    indexes: def.indexes ?? [],
-    ...resolveRules(def.rules, ownerField),
-  }
-  return { body, defaults }
-}
+// ---------- auth collection ----------
 
 /** 把我们的字段 upsert 进 PB 返回的现有 fields（保留已有 field id 与手工加的字段，绝不删字段） */
 export function mergeFields(existing: PbField[], incoming: PbField[]): PbField[] {
@@ -211,7 +195,8 @@ function fieldSatisfied(ours: PbField, existing: PbField | undefined): boolean {
   if (wantsRequired !== !!existing.required) return false
   for (const [k, v] of Object.entries(ours)) {
     if (k === 'type' || k === 'name' || k === 'required') continue
-    if (v === undefined || v === null || v === false || v === 0 || v === '') continue
+    // 只跳过未声明的选项；显式的 0/false/'' 必须参与比较（否则 min:0/max:0/maxSize:0 永不触发 diff）
+    if (v === undefined || v === null) continue
     if (Array.isArray(v) && v.length === 0) continue
     if (JSON.stringify(existing[k]) !== JSON.stringify(v)) return false
   }

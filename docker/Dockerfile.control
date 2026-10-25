@@ -12,5 +12,5 @@ WORKDIR /control
 RUN corepack enable
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages ./packages
-# 项目（manifest + hooks）由 volume 挂载到 /project
-CMD ["sh", "-c", "cd /project && /control/packages/cli/dist/index.js publish && /control/packages/cli/dist/index.js console --host 0.0.0.0 --port 7860"]
+# 项目（manifest + hooks）由 volume 挂载到 /project；编译产物写到 /data/pb_hooks 共享卷（pb 容器挂同一卷为 /pb_hooks）
+CMD ["sh", "-c", "cd /project && /control/packages/cli/dist/index.js publish --hooks-dir /data/pb_hooks && /control/packages/cli/dist/index.js console --host 0.0.0.0 --port 7860"]

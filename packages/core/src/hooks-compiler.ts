@@ -45,16 +45,22 @@ function buildHookGroups(manifest: ResolvedManifest, svc: ServiceEntry, hooksDir
   const collNames = Object.keys(svc.collections)
   const groups: HookGroup[] = []
 
+  // 字段 default 由服务级 beforeValidate 注入：只要任一 collection 声明了 default，
+  // 即使没有 svc.hooks / jsvm action 也必须建服务级 lifecycle 组，否则默认值静默丢失。
+  const hasDefaults = Object.values(svc.collections).some((def) =>
+    Object.values(def.fields ?? {}).some((spec) => spec.options.default !== undefined),
+  )
+
   const jsvmActionFiles = Object.values(svc.actions ?? {})
     .filter((a) => a.runtime !== 'sidecar')
     .map((a) => a.handler.split('#')[0])
   const serviceFiles = [...new Set([...(svc.hooks ? [svc.hooks] : []), ...jsvmActionFiles])]
-  if (serviceFiles.length) {
+  if (serviceFiles.length || hasDefaults) {
     groups.push({
       userFiles: serviceFiles.map((rel) => resolve(manifest.root, rel)),
       moduleAbs: resolve(hooksDir, `${svc.name}.user.pb.js`).split('\\').join('/'),
       filter: collNames,
-      lifecycle: !!svc.hooks,
+      lifecycle: !!svc.hooks || hasDefaults,
       kind: 'service',
     })
   }
@@ -117,7 +123,8 @@ ${pbHook}(function (e) {
   if (${JSON.stringify(group.filter)}.indexOf(coll) === -1) { e.next(); return }
   ${isValidate ? `
   var d = ${JSON.stringify(defaults)}[coll]
-  if (d) {
+  // 只在创建时回填默认值：update 时用户显式清空的字段不能被默认值悄悄盖回去
+  if (d && e.record.isNew()) {
     for (var k in d) {
       var v = e.record.get(k)
       if (v === '' || v === undefined || v === null) e.record.set(k, d[k])
@@ -229,10 +236,14 @@ export async function compileServiceHooks(
   for (const group of groups) {
     // typeof module 守卫：.user.pb.js 会被 PB 当 hook 文件自动加载（该上下文没有 module 全局），
     // 守卫避免自动加载报错刷日志；真正的加载发生在 handler 内的 require（CJS 上下文，module 可用）。
+    // userFiles 为空（纯 defaults 注入组）时产物为空导出模块，不能走 Object.assign({}, '{}') 的字符串误分支。
     const reexportRequires = group.userFiles.map((f) => `require(${JSON.stringify(f.split('\\').join('/'))})`).join(', ')
+    const moduleContents = reexportRequires
+      ? `if (typeof module !== "undefined") { module.exports = Object.assign({}, ${reexportRequires}) }`
+      : `if (typeof module !== "undefined") { module.exports = {} }`
     await build({
       stdin: {
-        contents: `if (typeof module !== "undefined") { module.exports = Object.assign({}, ${reexportRequires || '{}'}) }`,
+        contents: moduleContents,
         resolveDir: manifest.root,
         sourcefile: `${svc.name}--user-module.ts`,
         loader: 'ts',

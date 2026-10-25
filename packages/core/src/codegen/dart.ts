@@ -135,7 +135,7 @@ export function buildDartClient(config: OneshotConfig, outDir: string): DartGenR
       models.push(`  Map<String, dynamic> toJson() => {`)
       for (const [fieldName, spec] of fieldEntries) {
         if (isMulti(spec) || spec.kind === 'json' || spec.kind === 'geoPoint') {
-          models.push(`    '${fieldName}': ${fieldName}${spec.kind === 'json' ? '' : ''},`)
+          models.push(`    '${fieldName}': ${fieldName},`)
         } else {
           models.push(`    '${fieldName}': ${fieldName},`)
         }

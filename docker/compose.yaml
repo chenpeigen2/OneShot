@@ -14,6 +14,13 @@ services:
       - pb_data:/pb_data
       # hooks 由控制面编译后写入共享卷（项目 pb_hooks/ 下的 .pb.js / .user.pb.js 产物）
       - pb_hooks:/pb_hooks
+    healthcheck:
+      # Dockerfile.pb 已装 curl；control 等 healthy 后再启动发布
+      test: ["CMD", "curl", "-f", "http://localhost:8090/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
 
   control:
     build:
@@ -25,13 +32,15 @@ services:
       ONESHOT_PB_URL: http://pb:8090
       # PB 的 sidecar 转发路由通过这个地址回打控制服务器（publish 时烘焙进 hooks）
       ONESHOT_SIDECAR_URL: http://control:7860
-      ONESHOT_SUPERUSER_EMAIL: ${ONESHOT_SUPERUSER_EMAIL}
-      ONESHOT_SUPERUSER_PASSWORD: ${ONESHOT_SUPERUSER_PASSWORD}
+      ONESHOT_SUPERUSER_EMAIL: ${ONESHOT_SUPERUSER_EMAIL:?set in .env}
+      ONESHOT_SUPERUSER_PASSWORD: ${ONESHOT_SUPERUSER_PASSWORD:?set in .env}
     volumes:
       - ../examples/todo:/project
       - pb_hooks:/data/pb_hooks
     depends_on:
-      - pb
+      pb:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pb_data:

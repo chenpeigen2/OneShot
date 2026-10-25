@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, resolve } from 'node:path'
@@ -23,8 +23,9 @@ export function getOrCreateSidecarToken(root: string): string {
   const path = sidecarTokenPath(root)
   if (existsSync(path)) return readFileSync(path, 'utf8').trim()
   const token = randomBytes(24).toString('hex')
-  mkdirSync(resolve(root, '.oneshot'), { recursive: true })
-  writeFileSync(path, token)
+  // token 是服务间共享凭据：目录与文件都只给属主权限
+  mkdirSync(resolve(root, '.oneshot'), { recursive: true, mode: 0o700 })
+  writeFileSync(path, token, { mode: 0o600 })
   return token
 }
 
@@ -110,7 +111,10 @@ export async function handleSidecarRequest(
   }
 
   const auth = req.headers.authorization ?? ''
-  if (auth !== `Bearer ${opts.token}`) {
+  // 常量时间比较防时序侧信道；先比长度避免 timingSafeEqual 抛异常（长度不等本身已可判定）
+  const expected = `Bearer ${opts.token}`
+  const authOk = auth.length === expected.length && timingSafeEqual(Buffer.from(auth), Buffer.from(expected))
+  if (!authOk) {
     send(401, { error: 'invalid sidecar token' })
     return { handled: true, status: 401 }
   }
@@ -122,10 +126,24 @@ export async function handleSidecarRequest(
     return { handled: true, status: 404 }
   }
 
+  // 请求体上限 1MB（超出 413）；PB 的 $http.send 转发固定带 application/json
   let body: Record<string, any> = {}
   const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(chunk as Buffer)
+  let total = 0
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length
+    if (total > 1024 * 1024) {
+      send(413, { error: 'request body too large (max 1MB)' })
+      return { handled: true, status: 413 }
+    }
+    chunks.push(chunk as Buffer)
+  }
   if (chunks.length) {
+    const contentType = String(req.headers['content-type'] ?? '')
+    if (!contentType.includes('application/json')) {
+      send(415, { error: `expected application/json, got: ${contentType || '(none)'}` })
+      return { handled: true, status: 415 }
+    }
     try {
       body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     } catch {

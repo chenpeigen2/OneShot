@@ -21,12 +21,32 @@ function fail(msg: string): never {
 export function validateConfig(config: OneshotConfig, root: string): void {
   if (!config || typeof config !== 'object') fail('manifest 必须导出 defineConfig(...) 的结果作为 default')
   if (!config.name) fail('缺少 name')
+  if (config.name && /["\\]/.test(config.name)) fail(`name 不能包含引号或反斜杠：${config.name}`)
+  if (config.environments) {
+    for (const envName of Object.keys(config.environments)) {
+      // 环境键会以标识符形式写回 oneshot.config.ts（--env <key> 引用），必须合法
+      if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(envName)) {
+        fail(`环境键名 "${envName}" 非法：需以字母/_/$ 开头，只含字母/数字/_/$`)
+      }
+      // 对象字面量里 __proto__/constructor/prototype 会变成设原型而非键值对，写回后键静默消失
+      if (['__proto__', 'constructor', 'prototype'].includes(envName)) {
+        fail(`环境键名 "${envName}" 是保留字，不可用`)
+      }
+      if (envName.length > 64) fail(`环境键名 "${envName.slice(0, 16)}…" 超长（>64 字符）`)
+    }
+  }
   if (!Array.isArray(config.services) || config.services.length === 0) fail('至少需要一个 service')
   if (config.baseUrl && !/^https?:\/\//.test(config.baseUrl)) fail(`baseUrl 必须以 http(s) 开头：${config.baseUrl}`)
 
   const seenServices = new Set<string>()
   for (const svc of config.services) {
     if (!svc.name) fail('service 缺少 name')
+    // service 名会拼进 hooks 产物文件名与 action 路由（<svc>.pb.js、/api/oneshot/<svc>/<action>），必须收紧
+    if (!/^[a-z][a-z0-9_]*$/.test(svc.name)) {
+      fail(`service 名 "${svc.name}" 非法：需以小写字母开头，只含小写字母/数字/下划线`)
+    }
+    // 产物文件名 = <svc>.<coll>.user.pb.js 等，超长名会在写盘时 ENAMETOOLONG 中途炸
+    if (svc.name.length > 64) fail(`service 名超长（>64 字符）：${svc.name.slice(0, 16)}…`)
     if (seenServices.has(svc.name)) fail(`service 重名：${svc.name}`)
     seenServices.add(svc.name)
 
@@ -52,6 +72,10 @@ export function validateConfig(config: OneshotConfig, root: string): void {
         if (spec.kind === 'select' && !spec.options.values?.length) {
           fail(`select 字段 ${collName}.${fieldName} 必须提供 values`)
         }
+        // 单值字段的 maxSelect 不生效（PB 映射只读 multi 分支），显式声明即报错，避免静默忽略
+        if ((spec.kind === 'select' || spec.kind === 'relation') && spec.options.maxSelect !== undefined && !spec.options.multi) {
+          fail(`字段 ${collName}.${fieldName} 的 maxSelect 只在 multi: true 时生效（单值请去掉 maxSelect，多值请加 multi）`)
+        }
         if (spec.kind === 'relation' && !spec.options.collection) {
           fail(`relation 字段 ${collName}.${fieldName} 必须指定 collection（目标 collection 名）`)
         }
@@ -61,9 +85,22 @@ export function validateConfig(config: OneshotConfig, root: string): void {
       }
     }
 
+    const ACTION_RULES = ['public', 'authenticated', 'superuser']
+    const ACTION_RUNTIMES = ['jsvm', 'sidecar']
+    const ACTION_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
     for (const [actionName, action] of Object.entries(svc.actions ?? {})) {
       if (!/^[a-z][a-zA-Z0-9_]*$/.test(actionName)) fail(`action 名 "${actionName}" 非法`)
       if (!action.handler) fail(`action "${svc.name}.${actionName}" 缺少 handler（形如 './hooks/tasks.ts#stats'）`)
+      // rule/runtime/method 在发布前校验（否则坏值要到 hooks 编译/路由注册中途才炸，collections 已改完）
+      if (action.rule !== undefined && !ACTION_RULES.includes(action.rule)) {
+        fail(`action "${svc.name}.${actionName}" 的 rule 只支持 ${ACTION_RULES.join('/')}，收到：${action.rule}`)
+      }
+      if (action.runtime !== undefined && !ACTION_RUNTIMES.includes(action.runtime)) {
+        fail(`action "${svc.name}.${actionName}" 的 runtime 只支持 ${ACTION_RUNTIMES.join('/')}，收到：${action.runtime}`)
+      }
+      if (action.method !== undefined && !ACTION_METHODS.includes(action.method)) {
+        fail(`action "${svc.name}.${actionName}" 的 method 只支持 ${ACTION_METHODS.join('/')}，收到：${action.method}`)
+      }
       resolveAction(svc, actionName, root)
     }
 

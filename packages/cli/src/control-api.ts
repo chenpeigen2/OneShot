@@ -29,16 +29,26 @@ function json(res: import('node:http').ServerResponse, status: number, body: unk
 
 async function verifySuperuserToken(pbUrl: string, token: string): Promise<boolean> {
   try {
-    const res = await fetch(`${pbUrl}/api/collections?perPage=1`, { headers: { Authorization: token } })
+    const res = await fetch(`${pbUrl}/api/collections?perPage=1`, {
+      headers: { Authorization: token },
+      // 5 秒超时：PB 不可达时快速拒绝，不让写回请求挂着
+      signal: AbortSignal.timeout(5000),
+    })
     return res.ok
   } catch {
     return false
   }
 }
 
-async function readBody(req: import('node:http').IncomingMessage): Promise<string> {
+/** 读取请求体，超上限抛错（调用方回 413） */
+async function readBody(req: import('node:http').IncomingMessage, limitBytes: number): Promise<string> {
   const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(chunk as Buffer)
+  let total = 0
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length
+    if (total > limitBytes) throw new Error(`request body too large (max ${limitBytes} bytes)`)
+    chunks.push(chunk as Buffer)
+  }
   return Buffer.concat(chunks).toString('utf8')
 }
 
@@ -65,9 +75,22 @@ export function createManifestApi(opts: ManifestApiOptions): (req: import('node:
     }
 
     if (req.method === 'POST') {
+      // 写回的是整个配置对象，给 2MB 上限；请求体必须是 application/json
+      const contentType = String(req.headers['content-type'] ?? '')
+      if (!contentType.includes('application/json')) {
+        json(res, 415, { error: `expected application/json, got: ${contentType || '(none)'}` })
+        return true
+      }
+      let raw: string
+      try {
+        raw = await readBody(req, 2 * 1024 * 1024)
+      } catch {
+        json(res, 413, { error: 'request body too large (max 2MB)' })
+        return true
+      }
       let body: { config?: any }
       try {
-        body = JSON.parse(await readBody(req))
+        body = JSON.parse(raw)
       } catch {
         json(res, 400, { error: 'invalid JSON body' })
         return true

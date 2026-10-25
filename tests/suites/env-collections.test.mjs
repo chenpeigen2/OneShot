@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process'
 import { PB, STAGING, assert, summary, superuserLogin, j } from '../helpers.mjs'
 
-const CLI = process.env.TEST_CLI || '/Users/chenpeigen/code/OneShot/packages/cli/dist/index.js'
+const CLI = process.env.TEST_CLI || 'packages/cli/dist/index.js'
 const FIXTURE = process.env.TEST_FIXTURE_DIR || 'tests/.tmp/project'
 const H = { 'Content-Type': 'application/json', Authorization: await superuserLogin(PB) }
 

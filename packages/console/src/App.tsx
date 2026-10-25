@@ -340,14 +340,35 @@ function BackupsView({ onBack }: { onBack: () => void }) {
 }
 
 
+/** 服务不在 manifest（如已被其他会话删除）时给占位 UI，避免 JSON.parse(undefined) 白屏 */
 function EditorView({ config, serviceName, onBack, onSaved }: {
   config: any
   serviceName: string
   onBack: () => void
   onSaved: (report: any) => void
 }) {
+  const exists = !!config?.services?.some((s: any) => s.name === serviceName)
+  if (!exists) {
+    return (
+      <div className="mx-auto max-w-6xl p-8">
+        <button onClick={onBack} className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:border-amber-600">← 返回</button>
+        <p className="mt-4 rounded-lg bg-amber-950/60 px-3 py-2 text-sm text-amber-300">
+          服务 <span className="font-mono">{serviceName}</span> 不在当前 manifest 中（可能已被删除或尚未重新加载），请返回并刷新。
+        </p>
+      </div>
+    )
+  }
+  return <EditorForm key={serviceName} config={config} serviceName={serviceName} onBack={onBack} onSaved={onSaved} />
+}
+
+function EditorForm({ config, serviceName, onBack, onSaved }: {
+  config: any
+  serviceName: string
+  onBack: () => void
+  onSaved: (report: any) => void
+}) {
   const source = useMemo(
-    () => config.services.find((s: any) => s.name === serviceName),
+    () => config.services.find((s: any) => s.name === serviceName)!,
     [config, serviceName],
   )
   const [draft, setDraft] = useState<any>(() => JSON.parse(JSON.stringify(source)))
@@ -434,7 +455,8 @@ function EditorView({ config, serviceName, onBack, onSaved }: {
     let n = 'newAction'
     let i = 1
     while (draft.actions?.[n]) n = `newAction${i++}`
-    setAction(n, { method: 'GET', rule: 'authenticated', runtime: 'jsvm', handler: './hooks/tasks.ts#handler' })
+    // handler 留空：模板相关的默认路径必然校验失败，由 placeholder 提示格式，保存时校验兜底
+    setAction(n, { method: 'GET', rule: 'authenticated', runtime: 'jsvm', handler: '' })
   }
   const deleteAction = (name: string) => {
     setDraft((d: any) => {
@@ -586,40 +608,41 @@ function EditorView({ config, serviceName, onBack, onSaved }: {
               ))}
             </div>
           </div>
-
-          <div className="mt-4 border-t border-zinc-800 pt-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-zinc-500">自定义 actions（handler 文件需已存在；runtime: sidecar 由控制服务器承载）</span>
-              <button onClick={() => addAction()} className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs hover:border-amber-600">+ 添加 action</button>
-            </div>
-            <div className="mt-2 space-y-2">
-              {Object.entries(draft.actions ?? {}).map(([actionName, a]: [string, any]) => (
-                <div key={actionName} className="flex flex-wrap items-center gap-2">
-                  <input value={actionName} onChange={(e) => renameAction(actionName, e.target.value)} className={`${inputCls} w-32 font-mono text-xs`} title="action 名" />
-                  <select value={a.method ?? 'POST'} onChange={(e) => setAction(actionName, { method: e.target.value })} className={`${inputCls} text-xs`}>
-                    {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  <select value={a.rule ?? 'authenticated'} onChange={(e) => setAction(actionName, { rule: e.target.value })} className={`${inputCls} text-xs`}>
-                    {['public', 'authenticated', 'superuser'].map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                  <select value={a.runtime ?? 'jsvm'} onChange={(e) => setAction(actionName, { runtime: e.target.value })} className={`${inputCls} text-xs`}>
-                    <option value="jsvm">jsvm</option>
-                    <option value="sidecar">sidecar</option>
-                  </select>
-                  <input value={a.handler ?? ''} onChange={(e) => setAction(actionName, { handler: e.target.value })} placeholder="./hooks/tasks.ts#handler" className={`${inputCls} w-64 font-mono text-xs`} />
-                  <button onClick={() => deleteAction(actionName)} className="text-xs text-zinc-500 hover:text-red-400">删除</button>
-                </div>
-              ))}
-              {Object.keys(draft.actions ?? {}).length === 0 && <p className="text-xs text-zinc-600">暂无 action</p>}
-            </div>
-          </div>
-
-          <div className="mt-4 border-t border-zinc-800 pt-4">
-            <label className="text-xs text-zinc-500 block">服务级 hooks 文件（作用于全部 collections；留空 = 无）</label>
-            <input value={draft.hooks ?? ''} onChange={(e) => setDraft((d: any) => ({ ...d, hooks: e.target.value || undefined }))} placeholder="./hooks/tasks.ts" className={`${inputCls} mt-1 w-72 font-mono text-xs`} />
-          </div>
         </section>
       ))}
+
+      {/* actions 与服务级 hooks 属于服务而非单个 collection：渲染一次，避免多 collection 服务下重复 */}
+      <section className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-zinc-500">自定义 actions（handler 文件需已存在；runtime: sidecar 由控制服务器承载）</span>
+          <button onClick={() => addAction()} className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs hover:border-amber-600">+ 添加 action</button>
+        </div>
+        <div className="mt-2 space-y-2">
+          {Object.entries(draft.actions ?? {}).map(([actionName, a]: [string, any]) => (
+            <div key={actionName} className="flex flex-wrap items-center gap-2">
+              <input value={actionName} onChange={(e) => renameAction(actionName, e.target.value)} className={`${inputCls} w-32 font-mono text-xs`} title="action 名" />
+              <select value={a.method ?? 'POST'} onChange={(e) => setAction(actionName, { method: e.target.value })} className={`${inputCls} text-xs`}>
+                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select value={a.rule ?? 'authenticated'} onChange={(e) => setAction(actionName, { rule: e.target.value })} className={`${inputCls} text-xs`}>
+                {['public', 'authenticated', 'superuser'].map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <select value={a.runtime ?? 'jsvm'} onChange={(e) => setAction(actionName, { runtime: e.target.value })} className={`${inputCls} text-xs`}>
+                <option value="jsvm">jsvm</option>
+                <option value="sidecar">sidecar</option>
+              </select>
+              <input value={a.handler ?? ''} onChange={(e) => setAction(actionName, { handler: e.target.value })} placeholder="./hooks/<服务>.ts#导出名" className={`${inputCls} w-64 font-mono text-xs`} />
+              <button onClick={() => deleteAction(actionName)} className="text-xs text-zinc-500 hover:text-red-400">删除</button>
+            </div>
+          ))}
+          {Object.keys(draft.actions ?? {}).length === 0 && <p className="text-xs text-zinc-600">暂无 action</p>}
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+        <label className="text-xs text-zinc-500 block">服务级 hooks 文件（作用于全部 collections；留空 = 无）</label>
+        <input value={draft.hooks ?? ''} onChange={(e) => setDraft((d: any) => ({ ...d, hooks: e.target.value || undefined }))} placeholder="./hooks/tasks.ts" className={`${inputCls} mt-1 w-72 font-mono text-xs`} />
+      </section>
 
       <div className="mt-6 flex items-center gap-2">
         <input

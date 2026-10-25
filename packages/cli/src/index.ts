@@ -19,6 +19,7 @@ import {
   DEFAULT_PB_VERSION,
 } from './engine.js'
 import { serveControlServer } from './console-server.js'
+import { runDoctor } from './doctor.js'
 import { createManifestApi } from './control-api.js'
 import { ENV_EXAMPLE, INIT_GITIGNORE, renderTemplateReadme } from './templates.js'
 import { TEMPLATES, templateNames } from './templates-ts/registry.js'
@@ -112,7 +113,8 @@ async function doDev(flags: Record<string, string | boolean>): Promise<void> {
   loadDotEnv(process.cwd())
   const configPath = findConfig(flags)
   const paths = enginePaths(process.cwd())
-  const url = await engineUp({ port: flags.port ? Number(flags.port) : undefined })
+  // --pb-port 只管 PocketBase 引擎；控制服务器端口由 --port 管（两者默认 8090 / 7860 互不相干）
+  const url = await engineUp({ port: flags['pb-port'] ? Number(flags['pb-port']) : undefined })
   process.stderr.write(`🟢 PocketBase: ${url}  (admin: ${url}/_/  log: ${paths.logFile})\n`)
 
   let ctrl: Awaited<ReturnType<typeof startControl>> | null = null
@@ -286,7 +288,8 @@ const HELP = `oneshot — 基于 PocketBase 的自托管服务发布/生成框�
   oneshot publish [--config p] [--env name] [--prune] [--no-gen] [--hooks-dir p]
                                   发布 manifest 到 PocketBase（diff 式；--env 走 environments 块）
   oneshot gen [--config p]        只运行客户端代码生成（TS + Dart）
-  oneshot dev [--watch] [--port]  启动引擎 + 发布 + 生成（--watch 增量）
+  oneshot dev [--watch] [--pb-port] [--port]
+                                  启动引擎 + 发布 + 生成（--watch 增量；--pb-port 引擎端口 / --port 控制台端口）
   oneshot engine install [--version v]
                                   下载 PocketBase 二进制
   oneshot engine up [--port]      后台启动 PocketBase
@@ -295,6 +298,8 @@ const HELP = `oneshot — 基于 PocketBase 的自托管服务发布/生成框�
                                   创建/重置超管账号
   oneshot console [--host] [--port]
                                   启动只读控制台
+  oneshot doctor [--config p] [--url u] [--email e] [--password p] [--hooks-dir p] [--engine p] [--json]
+                                  一键体检：manifest/引擎/连通性/凭据/快照漂移/孤儿 hooks/磁盘（--json 供 CI，绝不读 stdin）
 
 环境变量: ONESHOT_PB_URL, ONESHOT_SUPERUSER_EMAIL, ONESHOT_SUPERUSER_PASSWORD（或项目根 .env）
 `
@@ -343,6 +348,38 @@ async function main(): Promise<void> {
       }
       case 'console':
         return await doConsole(flags)
+      case 'doctor': {
+        // 体检：复用 publish 同款 .env → 环境变量解析，但凭据缺失只 warn，绝不读 stdin
+        loadDotEnv(process.cwd())
+        let configPath: string | undefined
+        let configLookupError: string | undefined
+        try {
+          configPath = findConfig(flags)
+        } catch (err: any) {
+          configLookupError = err?.message ?? String(err)
+        }
+        const report = await runDoctor({
+          cwd: process.cwd(),
+          configPath,
+          configLookupError,
+          url: flags.url ? String(flags.url) : undefined,
+          email: flags.email ? String(flags.email) : undefined,
+          password: flags.password ? String(flags.password) : undefined,
+          hooksDir: flags['hooks-dir'] ? resolve(String(flags['hooks-dir'])) : undefined,
+          engineBin: flags.engine ? String(flags.engine) : undefined,
+        })
+        // 人类可读摘要始终走 stderr（--json 时 stdout 只放单个 JSON 文档）
+        const icon = { ok: '✅', warn: '⚠️', fail: '❌', skip: '⏭' } as const
+        for (const c of report.checks) process.stderr.write(`${icon[c.status]} [${c.id}] ${c.detail}\n`)
+        const count = (s: string) => report.checks.filter((c) => c.status === s).length
+        const skipPart = count('skip') > 0 ? ` · ${count('skip')} 项 skip` : ''
+        process.stderr.write(`诊断完成：${count('ok')} 项 ok · ${count('warn')} 项 warn · ${count('fail')} 项 fail${skipPart}\n`)
+        if (flags.json) {
+          process.stdout.write(JSON.stringify({ project: report.project, target: report.target, ok: report.ok, checks: report.checks }, null, 2) + '\n')
+        }
+        process.exitCode = report.ok ? 0 : 1
+        return
+      }
       case 'help':
       case undefined:
         process.stdout.write(HELP)

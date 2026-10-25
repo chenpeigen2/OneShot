@@ -1,7 +1,11 @@
 // 套件 3：manifest 读 → 改 → 写回 → 发布生效 → 幂等 → 非法拒绝 → .bak 备份
 // 注意：控制服务器（TEST_CTRL）以 tests/.tmp/manifest-project 为其 manifest，写回发生在该副本上。
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { dirname, join } from 'node:path'
 import { PB, CTRL, assert, summary, superuserLogin, j } from '../helpers.mjs'
+
+const CLI = process.env.TEST_CLI || 'packages/cli/dist/index.js'
 
 const H = { 'Content-Type': 'application/json', Authorization: await superuserLogin(PB) }
 
@@ -51,5 +55,97 @@ rt.rules.list = rulesBefore
 await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: JSON.stringify({ config: restored }) })
 const coll2 = await j(PB, 'GET', '/api/collections/tasks', undefined, H.Authorization)
 assert('还原: 规则恢复 + 字段保留（防误删设计）', coll2.data.fields?.some((f) => f.name === 'e2e_field') && coll2.data.listRule?.includes('owner = @request.auth.id'))
+
+// ---------- actions 编辑覆盖：manifest API 加减含 action 的服务，PB 侧路由随之生灭 ----------
+const HOOKS_DIR = process.env.TEST_MAIN_HOOKS_DIR
+
+/** 轮询等待路由达到期望状态码（热重载有 1-2 秒窗口，期间可能连接被拒或仍旧路由） */
+async function waitRouteStatus(urlPath, wantStatus, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      const res = await fetch(PB + urlPath, { signal: AbortSignal.timeout(1500) })
+      if (res.status === wantStatus) return true
+    } catch {}
+    if (Date.now() > deadline) return false
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
+
+const publishToMainHooks = () => execFileSync(process.execPath, [CLI, 'publish', '--config', join(dirname(path), 'oneshot.config.ts'), '--no-gen', '--hooks-dir', HOOKS_DIR], {
+  env: { ...process.env, ONESHOT_PB_URL: PB, ONESHOT_SIDECAR_URL: CTRL,
+    ONESHOT_SUPERUSER_EMAIL: 'admin@example.com', ONESHOT_SUPERUSER_PASSWORD: 'oneshot123' },
+  stdio: 'pipe',
+})
+
+// handler 源文件写入 manifest 副本项目（validateConfig 要求 handler 文件存在；套件自清理）
+const handlerFile = join(dirname(path), 'hooks', 'actions.ts')
+writeFileSync(handlerFile, "export function hello() {\n  return { hello: 'world', source: 'e2e-actions' }\n}\n", 'utf8')
+
+const { config: baseCfg } = await fetch(CTRL + '/api/manifest', { headers: H }).then((r) => r.json())
+const svcWithAction = (handler) => ({
+  name: 'e2e_actions',
+  collections: { action_notes: { fields: { title: { kind: 'text', options: {} } } } },
+  actions: { hello: { method: 'GET', rule: 'public', handler } },
+})
+const withActions = JSON.parse(JSON.stringify(baseCfg))
+withActions.services.push(svcWithAction('./hooks/actions.ts#hello'))
+const addedSvc = await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: JSON.stringify({ config: withActions }) }).then((r) => r.json())
+assert('actions: 新增含 action 的服务并发布', addedSvc.report?.created?.includes('action_notes'), JSON.stringify(addedSvc))
+
+// 控制服务器发布走默认 hooksDir（不为主实例加载）；同步进主实例 hooks 目录，等热重载后路由才真正可用
+publishToMainHooks()
+await waitRouteStatus('/api/oneshot/e2e_actions/hello', 200)
+const hello = await j(PB, 'GET', '/api/oneshot/e2e_actions/hello')
+assert('actions: PB 路由可用且返回 handler 结果', hello.status === 200 && hello.data?.hello === 'world', JSON.stringify(hello.data))
+
+// 缺失 handler 的非法 action 在写回前被拒（文件不被破坏）
+const badAct = JSON.parse(JSON.stringify(baseCfg))
+badAct.services.push(svcWithAction('./hooks/definitely-missing.ts#x'))
+const badActRes = await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: JSON.stringify({ config: badAct }) }).then((r) => r.json())
+assert('actions: 缺失 handler 的非法 action 被拒', !!badActRes.error?.includes('找不到') && !badActRes.report, JSON.stringify(badActRes))
+
+// 删除该服务 → manifest 恢复原状，路由随之消失
+const removedSvc = await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: JSON.stringify({ config: baseCfg }) }).then((r) => r.json())
+assert('actions: 服务从 manifest 删除成功', !!removedSvc.report && !removedSvc.error, JSON.stringify(removedSvc))
+publishToMainHooks()
+// publish 只清理"上一次快照有、本次没有"的服务的产物（且在发布方 hooksDir 语义下），主实例里的孤儿产物这里手工清
+rmSync(join(HOOKS_DIR, 'e2e_actions.pb.js'), { force: true })
+rmSync(join(HOOKS_DIR, 'e2e_actions.user.pb.js'), { force: true })
+await waitRouteStatus('/api/oneshot/e2e_actions/hello', 404)
+const gone = await j(PB, 'GET', '/api/oneshot/e2e_actions/hello')
+assert('actions: 删除服务后路由 404', gone.status === 404, `status=${gone.status}`)
+
+// 清理：manifest 删除不删 PB collection（防误删语义），套件直接删掉测试 collection 与 handler 文件
+const delColl = await j(PB, 'DELETE', '/api/collections/action_notes', undefined, H.Authorization)
+rmSync(handlerFile, { force: true })
+assert('actions: 测试 collection 已清理', [200, 204, 404].includes(delColl.status), `status=${delColl.status}`)
+
+// ---------- 对抗加固：写回限额（413/415）与非法 service/环境键拒绝且不落盘 ----------
+const srcBeforeHardening = readFileSync(path, 'utf8')
+
+// POST body 超 2MB → 413
+const tooBigBody = JSON.stringify({ config: { ...baseCfg, _pad: 'A'.repeat(2 * 1024 * 1024 + 64) } })
+const tooBig = await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: tooBigBody }).then((r) => r.status)
+assert('限额: >2MB 写回被 413 拒绝', tooBig === 413, `status=${tooBig}`)
+
+// 非 JSON Content-Type → 415
+const wrongCT = await fetch(CTRL + '/api/manifest', {
+  method: 'POST', headers: { ...H, 'Content-Type': 'text/plain' }, body: JSON.stringify({ config: baseCfg }),
+}).then((r) => r.status)
+assert('限额: text/plain 写回被 415 拒绝', wrongCT === 415, `status=${wrongCT}`)
+
+// service 名路径穿越 → validateConfig 拒绝（400），且文件未被改写
+const evil = JSON.parse(JSON.stringify(baseCfg))
+evil.services.push({ name: '../evil', collections: { t: { fields: { a: { kind: 'text', options: {} } } } } })
+const evilRes = await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: JSON.stringify({ config: evil }) }).then((r) => r.json())
+assert('校验: service 名 "../evil" 被拒', evilRes.error?.includes('非法') && !evilRes.report, JSON.stringify(evilRes))
+
+// 环境键带连字符（写回后不是合法标识符）→ 拒绝，且文件未被改写
+const badEnv = JSON.parse(JSON.stringify(baseCfg))
+badEnv.environments = { ...(badEnv.environments ?? {}), 'prod-1': { baseUrl: 'http://127.0.0.1:9' } }
+const badEnvRes = await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: JSON.stringify({ config: badEnv }) }).then((r) => r.json())
+assert('校验: 环境键 "prod-1" 被拒', badEnvRes.error?.includes('环境键名') && !badEnvRes.report, JSON.stringify(badEnvRes))
+assert('校验: 两类拒绝均未落盘', readFileSync(path, 'utf8') === srcBeforeHardening)
 
 summary('manifest')

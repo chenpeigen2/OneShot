@@ -19,10 +19,6 @@ function tsType(spec: FieldSpec): string {
   }
 }
 
-function isMulti(spec: FieldSpec): boolean {
-  return !!spec.options.multi || (spec.kind === 'file' && (spec.options.maxSelect ?? 1) > 1)
-}
-
 export interface TsGenResult {
   dir: string
   files: { name: string; content: string }[]

@@ -2,7 +2,6 @@ import { resolve as resolvePath } from 'node:path'
 import type { CollectionDef, OneshotConfig } from './schema.js'
 import {
   buildAuthCollectionCreate,
-  buildCollectionCreate,
   buildFields,
   buildSnapshot,
   collectionSatisfied,
@@ -100,7 +99,7 @@ export interface PublishOptions {
   superuserToken?: string
   /** 目标环境（manifest.environments 的键）；未指定用顶层 baseUrl */
   env?: string
-  /** hooks 编译输出目录，默认 <项目根>/.oneshot/pb_hooks */
+  /** hooks 编译输出目录，默认 <项目根>/pb_hooks（与 `oneshot engine up` 的 --hooksDir 一致） */
   hooksDir?: string
   /** 删除 manifest 中已不存在（且由上一次发布记录）的 collection */
   prune?: boolean
@@ -267,9 +266,10 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
     || 'http://127.0.0.1:7860').replace(/\/$/, '')
   const sidecarToken = getOrCreateSidecarToken(manifest.root)
 
-  // 上一次发布快照（hooks 过期清理与 prune 的所有权依据）
+  // 上一次发布快照（hooks 过期清理与 prune 的所有权依据）；project 名先转义再进 filter 串
+  const escapedProject = config.name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
   const prevMeta = await pb.listRecords(
-    META_COLLECTION, `?filter=${encodeURIComponent(`project = "${config.name}"`)}&perPage=1`,
+    META_COLLECTION, `?filter=${encodeURIComponent(`project = "${escapedProject}"`)}&perPage=1`,
   )
   const prevSnapshot = prevMeta.items[0]?.snapshot
   const prevServiceNames: string[] = prevSnapshot?.services?.map((s: any) => s.name) ?? []

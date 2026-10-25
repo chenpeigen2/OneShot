@@ -38,6 +38,33 @@ async function waitHealth(url, timeoutMs = 20000) {
   return false
 }
 
+/** 等待实例彻底下线（端口可复用）——冷重启前必须等旧进程退出，否则新进程绑定失败 */
+async function waitPortDown(url, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      await fetch(url + '/api/health', { signal: AbortSignal.timeout(600) })
+      await sleep(150)
+    } catch {
+      return true
+    }
+  }
+  return false
+}
+
+/** 等待 HTTP 服务器开始应答（任何状态码都算就绪，含 401） */
+async function waitHttpUp(url, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      await fetch(url + '/api/manifest', { signal: AbortSignal.timeout(800) })
+      return true
+    } catch {}
+    await sleep(200)
+  }
+  return false
+}
+
 async function main() {
   if (!existsSync(CLI)) {
     log('🏗️  先构建 workspace（pnpm -r build）…')
@@ -62,12 +89,16 @@ async function main() {
     mkdirSync(dataDir, { recursive: true })
     mkdirSync(hooksDir, { recursive: true })
     spawnSync(pbBin, ['superuser', 'upsert', 'admin@example.com', 'oneshot123', '--dir', dataDir], { stdio: 'ignore' })
-    const child = spawn(pbBin, ['serve', '--http', `127.0.0.1:${port}`, '--dir', dataDir, '--hooksDir', hooksDir],
+    // --migrationsDir 按实例隔离：PB 默认迁移目录是 <dataDir>/../pb_migrations，两个实例会成为兄弟目录共享一份，
+    // staging 发布的 automigrate 文件会泄入主实例，下一次 hooks 热重载重放迁移时因 collection 已存在而致命退出。
+    const migrationsDir = join(TMP, `pb_migrations_${name}`)
+    mkdirSync(migrationsDir, { recursive: true })
+    const child = spawn(pbBin, ['serve', '--http', `127.0.0.1:${port}`, '--dir', dataDir, '--hooksDir', hooksDir, '--migrationsDir', migrationsDir],
       { stdio: ['ignore', 'ignore', 'ignore'] })
     const url = `http://127.0.0.1:${port}`
     if (!(await waitHealth(url))) throw new Error(`实例 ${name} 启动超时`)
     log(`🟢 ${name}: ${url}`)
-    return { child, url, dataDir, hooksDir }
+    return { child, url, dataDir, hooksDir, migrationsDir }
   }
 
   const mainInst = await startInstance('main', MAIN_PORT)
@@ -123,10 +154,10 @@ async function main() {
     if (res.status !== 0) throw new Error(`模板发布失败（${tpl}）`)
   }
 
-  // 钩子已写入 → 冷重启主实例（规避热重载竞态）
+  // 钩子已写入 → 冷重启主实例（规避热重载竞态）；先等旧进程真正退出再拉起
   mainInst.child.kill('SIGKILL')
-  await sleep(800)
-  const child = spawn(pbBin, ['serve', '--http', `127.0.0.1:${MAIN_PORT}`, '--dir', mainInst.dataDir, '--hooksDir', mainInst.hooksDir],
+  if (!(await waitPortDown(mainInst.url))) throw new Error('主实例未能退出')
+  const child = spawn(pbBin, ['serve', '--http', `127.0.0.1:${MAIN_PORT}`, '--dir', mainInst.dataDir, '--hooksDir', mainInst.hooksDir, '--migrationsDir', mainInst.migrationsDir],
     { stdio: ['ignore', 'ignore', 'ignore'] })
   mainInst.child = child
   if (!(await waitHealth(mainInst.url))) throw new Error('主实例冷重启超时')
@@ -135,7 +166,8 @@ async function main() {
   // 控制服务器（manifest 副本项目 + sidecar 承载）
   const ctrl = spawn(process.execPath, [CLI, 'console', '--port', String(CTRL_PORT), '--config', join(manifestDir, 'oneshot.config.ts')],
     { stdio: 'ignore', env: { ...process.env, ONESHOT_PB_URL: `http://127.0.0.1:${MAIN_PORT}`, ONESHOT_SIDECAR_URL: `http://127.0.0.1:${CTRL_PORT}` } })
-  await sleep(1200)
+  // 控制服务器就绪即继续（/api/manifest 有响应即可，未登录 401 也算），不再盲等固定时长
+  if (!(await waitHttpUp(`http://127.0.0.1:${CTRL_PORT}`))) throw new Error('控制服务器启动超时')
   log(`🟢 control: http://127.0.0.1:${CTRL_PORT}`)
 
   const suiteEnv = {
@@ -148,9 +180,10 @@ async function main() {
     TEST_FIXTURE_DIR: fixtureDir,
     TEST_CORE_DIR: join(ROOT, 'packages/core'),
     TEST_MAIN_HOOKS_DIR: mainHooksDir,
+    TEST_PB_BIN: pbBin,
   }
 
-  const suites = ['core', 'sidecar-realtime', 'manifest', 'env-collections', 'templates']
+  const suites = ['core', 'sidecar-realtime', 'manifest', 'env-collections', 'templates', 'doctor']
     .filter((s) => !ONLY || s === ONLY)
   let failed = 0
   for (const suite of suites) {

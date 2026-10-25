@@ -1,10 +1,7 @@
 // 套件 1：核心能力（注册登录/owner 规则隔离/hooks 生命周期与默认值/jsvm action/filter/sort/meta）
-import { PB, assert, summary, j, makeUser } from '../helpers.mjs'
+import { PB, assert, summary, j, makeUser, superuserLogin } from '../helpers.mjs'
 
-const su = { token: await (async () => (await fetch(PB + '/api/collections/_superusers/auth-with-password', {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ identity: 'admin@example.com', password: 'oneshot123' }),
-}).then((r) => r.json())).token)() }
+const su = { token: await superuserLogin(PB) }
 
 const a = await makeUser()
 const b = await makeUser()
