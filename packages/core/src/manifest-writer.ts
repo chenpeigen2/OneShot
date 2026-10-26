@@ -131,9 +131,15 @@ export function serializeConfig(config: OneshotConfig): string {
   lines.push(`  name: ${value(config.name)},`)
   if (config.baseUrl !== undefined) lines.push(`  baseUrl: ${value(config.baseUrl)},`)
   if (config.sidecarUrl !== undefined) lines.push(`  sidecarUrl: ${value((config as any).sidecarUrl)},`)
+  if (config.batch !== undefined) lines.push(`  batch: ${value(config.batch)},`)
   if (config.auth) {
     const authParts = [`collection: ${value(config.auth.collection ?? 'users')}`]
     if (config.auth.signup !== undefined) authParts.push(`signup: ${value(config.auth.signup)}`)
+    if (config.auth.listRule !== undefined) authParts.push(`listRule: ${value(config.auth.listRule)}`)
+    if (config.auth.viewRule !== undefined) authParts.push(`viewRule: ${value(config.auth.viewRule)}`)
+    if (config.auth.createRule !== undefined) authParts.push(`createRule: ${value(config.auth.createRule)}`)
+    if (config.auth.updateRule !== undefined) authParts.push(`updateRule: ${value(config.auth.updateRule)}`)
+    if (config.auth.managed !== undefined) authParts.push(`managed: ${value(config.auth.managed as string[])}`)
     let authBlock = `  auth: { ${authParts.join(', ')} }`
     if (config.auth.fields && Object.keys(config.auth.fields).length) {
       lines.push(`  auth: {`)
@@ -146,7 +152,9 @@ export function serializeConfig(config: OneshotConfig): string {
       lines.push('    },')
       if (config.auth.listRule !== undefined) lines.push(`    listRule: ${value(config.auth.listRule)},`)
       if (config.auth.viewRule !== undefined) lines.push(`    viewRule: ${value(config.auth.viewRule)},`)
+      if (config.auth.createRule !== undefined) lines.push(`    createRule: ${value(config.auth.createRule)},`)
       if (config.auth.updateRule !== undefined) lines.push(`    updateRule: ${value(config.auth.updateRule)},`)
+      if (config.auth.managed !== undefined) lines.push(`    managed: ${value(config.auth.managed as string[])},`)
       lines.push(`  },`)
     } else {
       lines.push(authBlock + ',')

@@ -9,7 +9,7 @@
  * 用法：node tests/run-e2e.mjs [--keep] [--suite core]
  */
 import { spawn, execFileSync, spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync, symlinkSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync, symlinkSync, readFileSync, watch } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -80,6 +80,7 @@ async function main() {
     log('⬇️  下载 PocketBase 引擎…')
     execFileSync(process.execPath, [CLI, 'engine', 'install'], { cwd: TMP, stdio: 'inherit' })
     pbBin = join(TMP, '.oneshot/pocketbase')
+    if (process.platform === 'win32') pbBin += '.exe'
   }
 
   // 起两个隔离实例
@@ -109,7 +110,7 @@ async function main() {
     const dir = join(TMP, name)
     cpSync(join(ROOT, 'tests/fixtures'), dir, { recursive: true })
     mkdirSync(join(dir, 'node_modules/@oneshot'), { recursive: true })
-    symlinkSync(join(ROOT, 'packages/core'), join(dir, 'node_modules/@oneshot/core'))
+    symlinkSync(join(ROOT, 'packages/core'), join(dir, 'node_modules/@oneshot/core'), process.platform === 'win32' ? 'junction' : 'dir')
     return dir
   }
   const fixtureDir = scaffold('project')
@@ -145,7 +146,7 @@ async function main() {
     rmSync(join(dir, 'hooks'), { recursive: true, force: true })
     execFileSync(process.execPath, [CLI, 'init', dir, '--template', tpl], { stdio: 'pipe', env: process.env })
     mkdirSync(join(dir, 'node_modules/@oneshot'), { recursive: true })
-    symlinkSync(join(ROOT, 'packages/core'), join(dir, 'node_modules/@oneshot/core'))
+    symlinkSync(join(ROOT, 'packages/core'), join(dir, 'node_modules/@oneshot/core'), process.platform === 'win32' ? 'junction' : 'dir')
     const res = spawnSync(process.execPath, [CLI, 'publish', '--config', join(dir, 'oneshot.config.ts'), '--no-gen', '--hooks-dir', mainHooksDir],
       { stdio: 'pipe', encoding: 'utf8', env: { ...process.env, ONESHOT_PB_URL: `http://127.0.0.1:${MAIN_PORT}`,
         ONESHOT_SUPERUSER_EMAIL: 'admin@example.com', ONESHOT_SUPERUSER_PASSWORD: 'oneshot123',
@@ -163,6 +164,29 @@ async function main() {
   mainInst.child = child
   if (!(await waitHealth(mainInst.url))) throw new Error('主实例冷重启超时')
   log('🟢 main: 冷重启完成（hooks 就绪）')
+
+  const restartFlag = join(TMP, 'restart-main')
+  const restartAck = join(TMP, 'main-restarted')
+  writeFileSync(restartFlag, '')
+  writeFileSync(restartAck, '')
+  let restarting = false
+  const restartWatcher = watch(restartFlag, { persistent: false }, async () => {
+    if (restarting) return
+    restarting = true
+    const request = readFileSync(restartFlag, 'utf8')
+    try {
+      mainInst.child.kill('SIGKILL')
+      if (!(await waitPortDown(mainInst.url))) throw new Error('主实例未能按请求退出')
+      mainInst.child = spawn(pbBin, ['serve', '--http', `127.0.0.1:${MAIN_PORT}`, '--dir', mainInst.dataDir, '--hooksDir', mainInst.hooksDir, '--migrationsDir', mainInst.migrationsDir],
+        { stdio: ['ignore', 'ignore', 'ignore'] })
+      if (!(await waitHealth(mainInst.url))) throw new Error('主实例按请求重启超时')
+      writeFileSync(restartAck, request)
+    } catch (err) {
+      log(`❌ 主实例按请求重启失败：${err?.message ?? err}`)
+    } finally {
+      restarting = false
+    }
+  })
 
   // 控制服务器（manifest 副本项目 + sidecar 承载）
   const ctrl = spawn(process.execPath, [CLI, 'console', '--port', String(CTRL_PORT), '--config', join(manifestDir, 'oneshot.config.ts')],
@@ -182,6 +206,8 @@ async function main() {
     TEST_CORE_DIR: join(ROOT, 'packages/core'),
     TEST_MAIN_HOOKS_DIR: mainHooksDir,
     TEST_PB_BIN: pbBin,
+    TEST_RESTART_MAIN: restartFlag,
+    TEST_RESTART_ACK: restartAck,
   }
 
   const suites = ['core', 'sidecar-realtime', 'manifest', 'env-collections', 'templates', 'doctor', 'security', 'console-ui', 'seeds']
@@ -189,17 +215,18 @@ async function main() {
   let failed = 0
   for (const suite of suites) {
     log(`\n━━━ 套件 ${suite} ━━━`)
-    const res = spawnSync(process.execPath, [join(ROOT, `tests/suites/${suite}.test.mjs`)], {
-      env: suiteEnv, encoding: 'utf8', timeout: 180000,
+    const status = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [join(ROOT, `tests/suites/${suite}.test.mjs`)], { env: suiteEnv, stdio: 'inherit' })
+      const timer = setTimeout(() => child.kill('SIGKILL'), 180000)
+      child.on('close', (code) => { clearTimeout(timer); resolve(code) })
     })
-    process.stdout.write(res.stdout ?? '')
-    if (res.stderr) process.stderr.write(res.stderr)
-    if (res.status !== 0) failed++
+    if (status !== 0) failed++
   }
 
   log(`\n━━━ 总结：${suites.length - failed}/${suites.length} 套件通过 ━━━`)
 
   // 清理
+  restartWatcher.close()
   ctrl.kill('SIGKILL')
   mainInst.child.kill('SIGKILL')
   stagingInst.child.kill('SIGKILL')

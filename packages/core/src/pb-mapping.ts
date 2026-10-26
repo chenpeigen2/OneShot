@@ -228,13 +228,64 @@ export function collectionSatisfied(existing: PbCollection, desired: {
 
 // ---------- auth collection ----------
 
+/**
+ * 框架内置的系统服务账号（sidecar 用它执行业务级写操作）。
+ * auth 的托管字段规则默认放行它 —— 否则 sidecar 无法更新欠款/角色等受管字段。
+ */
+export const SERVICE_ACCOUNT_EMAIL = 'oneshot-service@system.local'
+
+/** 把默认值渲染成 PB filter 字面量（字符串加引号，数字/布尔原样） */
+function pbLiteral(value: unknown): string {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value)
+}
+
+/**
+ * 托管字段的"注册锁"：客户端可以省略该字段（服务端注入默认值），
+ * 也可以显式提交默认值；提交其他值一律拒绝（不能靠注册提权）。
+ *
+ * 例（role 默认 reader）：(@request.body.role = "" || @request.body.role = "reader")
+ */
+export function managedCreateLock(managed: string[], fields: Record<string, FieldSpec> = {}): string {
+  return managed.map((field) => {
+    const def = fields[field]?.options?.default
+    return def === undefined
+      ? `(@request.body.${field} = "")`
+      : `(@request.body.${field} = "" || @request.body.${field} = ${pbLiteral(def)})`
+  }).join(' && ')
+}
+
+/**
+ * 托管字段的"自助更新锁"：只能省略，或保持与库中现值一致。
+ * 裸字段名在 update 规则里指该记录当前存储值（PB 语义）。
+ *
+ * 例：(@request.body.fines = "" || @request.body.fines = fines)
+ */
+export function managedUpdateLock(managed: string[]): string {
+  return managed.map((field) => `(@request.body.${field} = "" || @request.body.${field} = ${field})`).join(' && ')
+}
+
 export function buildAuthCollectionCreate(
   name: string,
   signup: 'public' | 'authenticated' | 'superuser',
   customFields: Record<string, FieldSpec> = {},
-  rules: { listRule?: string; viewRule?: string; updateRule?: string } = {},
+  rules: { listRule?: string | null; viewRule?: string | null; createRule?: string | null; updateRule?: string | null; managed?: string[] } = {},
 ): Record<string, unknown> {
-  const createRule = signup === 'public' ? '' : signup === 'authenticated' ? '@request.auth.id != ""' : null
+  const managed = rules.managed ?? []
+  const signupBase = signup === 'public' ? '' : signup === 'authenticated' ? '@request.auth.id != ""' : null
+  // 注册：公开注册 + 托管字段锁（客户端可省略托管字段，但不能改成非默认值）
+  const generatedCreate = signupBase === null
+    ? null
+    : [signupBase, managedCreateLock(managed, customFields)].filter(Boolean).join(' && ')
+  // 自助更新：仅本人可改，托管字段只能省略或保持现值；被封禁者不可改；
+  // 系统服务账号旁路（sidecar 执行业务级写：改角色、记罚款、收款）
+  const selfBranch = ['id = @request.auth.id']
+  if (managed.includes('blocked')) selfBranch.push('blocked != true')
+  selfBranch.push(managedUpdateLock(managed))
+  const generatedUpdate = managed.length
+    ? `@request.auth.email = ${JSON.stringify(SERVICE_ACCOUNT_EMAIL)} || (${selfBranch.join(' && ')})`
+    : '@request.auth.id != "" && id = @request.auth.id'
+  const createRule = rules.createRule !== undefined ? rules.createRule : generatedCreate
+  const updateRule = rules.updateRule !== undefined ? rules.updateRule : generatedUpdate
   // 自定义字段合并（系统字段 name/avatar 之后）；password/email 等由 PB 系统管理，禁止覆盖
   const systemOnly = new Set(['id', 'password', 'tokenKey', 'email', 'emailVisibility', 'verified'])
   const extra = Object.entries(customFields)
@@ -248,10 +299,10 @@ export function buildAuthCollectionCreate(
       { type: 'file', name: 'avatar', maxSelect: 1, mimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] },
       ...extra,
     ],
-    listRule: rules.listRule ?? '@request.auth.id != "" && id = @request.auth.id',
-    viewRule: rules.viewRule ?? '@request.auth.id != "" && id = @request.auth.id',
+    listRule: rules.listRule !== undefined ? rules.listRule : '@request.auth.id != "" && id = @request.auth.id',
+    viewRule: rules.viewRule !== undefined ? rules.viewRule : '@request.auth.id != "" && id = @request.auth.id',
     createRule,
-    updateRule: rules.updateRule ?? '@request.auth.id != "" && id = @request.auth.id',
+    updateRule,
     deleteRule: null,
     passwordAuth: { enabled: true, identityFields: ['email'] },
   }

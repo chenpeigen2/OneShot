@@ -48,6 +48,23 @@ export function validateConfig(config: OneshotConfig, root: string): void {
       if (spec.kind === 'select' && !spec.options.values?.length) fail(`auth select 字段 ${fieldName} 必须提供 values`)
     }
   }
+  if (config.auth?.managed) {
+    const managed = config.auth.managed
+    if (!Array.isArray(managed) || managed.some((f) => typeof f !== 'string')) {
+      fail('auth.managed 必须是字符串数组（托管字段名）')
+    }
+    const known = new Set(Object.keys(config.auth?.fields ?? {}))
+    for (const fieldName of managed) {
+      if (!known.has(fieldName)) {
+        fail(`auth.managed 引用了未定义的字段 "${fieldName}"（需在 auth.fields 中声明）`)
+      }
+      const spec = config.auth!.fields![fieldName]
+      if (spec.options.default === undefined) {
+        fail(`auth.managed 字段 "${fieldName}" 必须声明 default（托管字段的值由服务端决定）`)
+      }
+    }
+    if (new Set(managed).size !== managed.length) fail('auth.managed 存在重复字段名')
+  }
 
   const seenServices = new Set<string>()
   for (const svc of config.services) {

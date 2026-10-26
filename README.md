@@ -34,6 +34,11 @@ oneshot dev --watch                 # 引擎 + 发布 + 生成，配置/hooks �
 - **PB Admin UI**：http://127.0.0.1:8090/_/
 - **OneShot 控制台**：`oneshot console` → http://127.0.0.1:7860 （填 PB 地址 + 超管账号登录；支持服务编辑器写回与备份面板）
 
+## 工程规范
+
+- **禁止 `any`**：源码、测试中的 TypeScript、代码生成器及生成客户端均适用。未信任输入使用 `unknown` + 校验/收窄，内部使用明确领域类型；禁止 `as any` 和双重断言绕校验。完整规则与存量清理要求见 `AGENTS.md`。
+- 模块组织与分阶段实施方案见 `docs/requirements/R4.md`；应用项目目录规范见 `docs/application-structure.md`。
+
 ## 服务定义（`oneshot.config.ts`）
 
 ```ts
@@ -71,7 +76,22 @@ export default defineConfig({
 })
 ```
 
-**规则**：`public` / `authenticated` / `owner`（自动定位指向 auth collection 的 relation 字段）/ `superuser`，或直接写 PB filter 表达式原文。
+**规则**：`public` / `authenticated` / `owner`（自动定位指向 auth collection 的 relation 字段）/ `superuser`，或直接写 PB filter 表达式原文。认证 collection 支持 `auth.listRule/viewRule/createRule/updateRule`。
+
+角色、封禁、欠款、借阅上限等**服务端托管字段**用 `auth.managed` 声明，不要要求注册客户端提交内部字段：
+
+```ts
+auth: {
+  signup: 'public',
+  fields: {
+    role: s.select(['reader', 'librarian'], { default: 'reader' }),
+    maxBorrow: s.number({ default: 5 }),
+  },
+  managed: ['role', 'maxBorrow'],
+}
+```
+
+框架会同时生成注册锁和自助更新锁：公开注册只提交账号密码即可获得默认值，显式提交非默认值会被拒绝；本人只能省略这些字段或提交与库中现值相同的值，不能自行提权或清零欠款。系统服务账号仍可执行经过 action 校验的业务写。显式 `createRule/updateRule` 可覆盖生成结果。已有认证集合发布时，未显式声明的规则原样保留，避免同实例的模板项目互相清掉 RBAC；新建认证集合才应用默认规则。
 
 **Hooks**（`hooks/*.ts`）：`beforeValidate` / `beforeCreateRequest` / `afterCreate` / `beforeUpdateRequest` / `afterUpdate` / `beforeDelete` / `afterDelete` / 自定义 action handler。上下文：`{ e, app, record?, auth?, query?, body?, http, log }`。拒绝请求抛 PB 内置错误：`BadRequestError` / `ForbiddenError` / ...（消息透传给客户端）。同步逻辑，无 npm/Node API —— 与 PB JSVM（goja）能力一致。
 
@@ -97,6 +117,8 @@ actions: {
 
 sidecar handler 是完整 Node：npm 包、异步、`node:crypto` 随便用。鉴权中间件仍在 PB 侧执行，通过后 PB 路由经 `$http.send`（服务间共享 token）转发到控制服务器 `/sidecar/*`；handler 用 `ctx.pbUrl + ctx.token` 回调 PB API —— 用户身份与 collection 规则原样生效，不给 sidecar 超管权限。
 
+**多记录原子写入**：需要 `/api/batch` 时在 manifest 顶层声明 `batch: { maxRequests: 50, timeout: 3 }`（`maxBodySize` 可选），publish 会显式开启 PB 批量事务；未声明时不改动实例设置。`ctx.systemToken` 可执行已校验的系统级写入，图书示例展示了事务与部分唯一索引结合的库存型业务做法。
+
 ## 命令
 
 | 命令 | 作用 |
@@ -109,7 +131,7 @@ sidecar handler 是完整 Node：npm 包、异步、`node:crypto` 随便用。�
 | `oneshot superuser <email> <pass>` | 创建/重置超管 |
 | `oneshot console` | 控制服务器：控制台（服务编辑器 + 备份面板）+ manifest 写回 API + sidecar JSON API（同一端口 7860） |
 | `oneshot doctor [--json]` | 一键体检：manifest / 引擎 / 连通性 / 凭据 / 快照漂移 / 孤儿 hooks / 磁盘占用（`--json` 供 CI，绝不读 stdin） |
-| `pnpm test:e2e` | 全量 e2e（隔离双实例 + 真实浏览器，121 项断言，CI 同款；首次需 `pnpm exec playwright install chromium`） |
+| `pnpm test:e2e` | 全量 e2e（隔离双实例 + 真实浏览器，140 项断言，CI 同款；首次需 `pnpm exec playwright install chromium`） |
 
 环境变量：`ONESHOT_PB_URL`、`ONESHOT_SUPERUSER_EMAIL`、`ONESHOT_SUPERUSER_PASSWORD`、`ONESHOT_SIDECAR_URL`（compose 内 `http://control:7860`；发布时烘焙进 hooks，支持项目根 `.env`）。
 
@@ -118,16 +140,17 @@ sidecar handler 是完整 Node：npm 包、异步、`node:crypto` 随便用。�
 **TS/React**（包官方 `pocketbase` JS SDK，零额外运行时）：
 
 ```ts
-import { createClient, useAuth, useRecords } from './api/client'
+import { createClient } from './api/client'
+import { OneShotProvider, useAuth, useClient, useRecords } from './api/react'
 
 const api = createClient('http://127.0.0.1:8090')
 await api.users.login('a@b.c', 'pass')
 await api.tasks.create({ title: '买咖啡', owner: user.id })
 const stats = await api.tasks.stats()            // 自定义 action
 
-// React
+// React：组件内通过 useClient() 复用 Provider 的同一个登录客户端
 <OneShotProvider baseUrl="http://127.0.0.1:8090">
-  <TaskList />   // useAuth() / useRecords<TaskRecord>('tasks', { filter: 'done = false' })
+  <TaskList />   // useAuth() / useClient() / useRecords<TaskRecord>(...)
 </OneShotProvider>
 ```
 
@@ -190,7 +213,7 @@ oneshot publish                 # 默认：顶层 baseUrl
 **控制台编辑写回**：服务编辑器改字段/规则、增删 collection → 写回 `oneshot.config.ts`（原文件备份 `.bak`，用 git diff/回滚）→ 立即 diff 式发布。GitOps 语义不变：文件仍是唯一真源，控制台只是它的 GUI。注意三点：写回不保留手工注释与排版；从 manifest 删除字段/ collection 不删 PB 侧对象与数据（防误删，彻底删除去 PB Admin UI）；PB 路由注册唯一（sidecar handler 改动由 dev watch 自动热重载 sidecar registry）。
 - **发布快照**：写入 `oneshot_meta` collection（项目名、manifest hash、服务清单），控制台据此渲染总览。
 - **JSVM 可靠面（v0.40.6 实测）**：`onRecordValidate` + 抛 `BadRequestError` + 文本/日期字段 set 是可靠组合；`onRecordCreateRequest` 在含 json 字段的 collection 上不可依赖、`record.set` 跨 record 写值不持久化、filter 参数注册无效 —— 框架已把这些约束消化进生成器（作用域判断走 `e.record.collection().name`、共享代码走 `.user.pb.js` 模块 + 绝对路径 require、body 字节归一化），**跨表写值类业务逻辑请用 sidecar action**（shop 模板的 checkout 即示范）。
-- **测试与 CI**：`pnpm test:e2e` 拉起隔离双实例跑 9 个套件（core 15 / sidecar-realtime 11 / manifest 22 / env-collections 7 / templates 15 / seeds 9 / doctor 14 / security 15 / console-ui 24，共 132 项断言，按 unix 口径计）；GitHub Actions 在 push/PR 时自动执行同一套件。**console-ui 套件用 Playwright 驱动真实浏览器走控制台构建产物**（登录/仪表盘/记录过滤/编辑器写回/备份面板五条路径），优先复用系统 Chrome（channel: 'chrome'，零下载），无 Chrome 时回落自带 chromium（一次性 `pnpm exec playwright install chromium`；CI 已有安装 step），缺浏览器时该套件以带安装指引的错误失败、不会静默跳过。生成的 TS 客户端过 `tsc --strict`，Dart 过 `dart analyze`。
+- **测试与 CI**：`pnpm test:e2e` 拉起隔离双实例跑 9 个套件（core 28 / sidecar-realtime 11 / manifest 22 / env-collections 7 / templates 15 / seeds 9 / doctor 14 / security 10 / console-ui 24，共 140 项断言，按 unix 口径计）；GitHub Actions 在 push/PR 时自动执行同一套件。**console-ui 套件用 Playwright 驱动真实浏览器走控制台构建产物**（登录/仪表盘/记录过滤/编辑器写回/备份面板五条路径），优先复用系统 Chrome（channel: 'chrome'，零下载），无 Chrome 时回落自带 chromium（一次性 `pnpm exec playwright install chromium`；CI 已有安装 step），缺浏览器时该套件以带安装指引的错误失败、不会静默跳过。生成的 TS 客户端过 `tsc --strict`，Dart 过 `dart analyze`。
 - **sidecar 信任边界**：sidecar token 是"绕过 PB 直调 handler"的唯一凭据，出现在三处——`.oneshot/sidecar-token` 母本（每次 publish/console 启动自动自愈为 `0600`、目录 `0700`，只收敛权限、绝不轮换值）、`pb_hooks/<svc>.pb.js` 明文烘焙（设计使然：PB JSVM 运行时需要它发 `$http.send`，靠卷隔离与主机用户卫生缓解）、控制服务器内存。任何持有 token 的进程可跳过 PB collection 规则直调 `/sidecar/{service}/{action}`——请像保管数据库密码一样保管该文件。**handler 路径允许引用项目外文件**（`../` 或绝对路径均可，如共享 hooks 库）：这属文档化决策——manifest 由超管编写、超管为可信角色，引用越界文件是其自担风险；security 套件已把该现状钉进 CI，未来收紧/放宽都会红灯提示为有意识的行为变更。
 - **备份**：控制台「备份」页基于 PB 原生 backups API（创建/下载/恢复/删除；恢复会重启 PB）。
 

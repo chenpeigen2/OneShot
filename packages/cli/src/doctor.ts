@@ -267,8 +267,9 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     if (files === null) {
       push({ id: 'hooks', status: 'fail', detail: `hooks 目录不可读：${hooksDir}（${readError}）` })
     } else {
+      const authDefaults = `${manifest?.config.auth?.collection ?? 'users'}.defaults.pb.js`
       // 服务名解析：去掉 .pb.js 后取第一个 . 之前的部分（覆盖 <svc>.pb.js / <svc>.user.pb.js / <svc>.<coll>.user.pb.js）
-      const orphans = files.filter((f) => !knownServices.has(f.replace(/\.pb\.js$/, '').split('.')[0]))
+      const orphans = files.filter((f) => f !== authDefaults && !knownServices.has(f.replace(/\.pb\.js$/, '').split('.')[0]))
       if (orphans.length > 0) {
         push({ id: 'hooks', status: 'warn', orphans, detail: `发现 ${orphans.length} 个孤儿 hooks 产物：${orphans.join('、')}（确认无用后可手工删除）` })
       } else if (files.length > 0) {

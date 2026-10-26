@@ -1,5 +1,5 @@
 import { resolve as resolvePath } from 'node:path'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import type { CollectionDef, OneshotConfig } from './schema.js'
 import {
   buildAuthCollectionCreate,
@@ -190,16 +190,40 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
     log(`  ~ collection ${name} 已更新`)
   }
 
-  // 1) auth collection（先建，relation 依赖它）—— 始终 ensure（缺 config.auth 也要保证 users 存在，relation 依赖）
-  {
+  // 1) auth collection（先建，relation 依赖它）
+  // 未声明 auth 的项目只补建缺失的 users，不覆盖已有字段/规则：
+  // 否则 blog/shop/chat 这类模板发布会把同实例的 RBAC 与托管字段锁重置成公开默认。
+  if (config.auth || !existing.has(authCollectionName)) {
     const signup = config.auth?.signup ?? 'public'
+    const currentAuth = existing.get(authCollectionName)
+    const managed = config.auth?.managed
+    // 已有 users 只改显式声明的规则；未声明的原样保留，避免模板发布清掉同实例的 RBAC。
+    // 新 users 或声明 managed 时才走 buildAuthCollectionCreate 的规则推导。
+    const rule = (explicit: string | undefined, current: string | null | undefined, generate: boolean) =>
+      explicit !== undefined ? explicit : generate ? undefined : current
     const authBody = buildAuthCollectionCreate(authCollectionName, signup, config.auth?.fields, {
-      listRule: config.auth?.listRule,
-      viewRule: config.auth?.viewRule,
-      updateRule: config.auth?.updateRule,
+      listRule: rule(config.auth?.listRule, currentAuth?.listRule, !currentAuth),
+      viewRule: rule(config.auth?.viewRule, currentAuth?.viewRule, !currentAuth),
+      createRule: rule(config.auth?.createRule, currentAuth?.createRule, !currentAuth || managed !== undefined),
+      updateRule: rule(config.auth?.updateRule, currentAuth?.updateRule, !currentAuth || managed !== undefined),
+      managed,
     }) as Record<string, unknown>
     const { passwordAuth, ...authDesired } = authBody
     await ensureCollection(authCollectionName, authDesired as any, { passwordAuth })
+  } else {
+    report.unchanged.push(authCollectionName)
+  }
+
+  if (config.batch) {
+    await pb.request('PATCH', '/api/settings', {
+      batch: {
+        enabled: true,
+        maxRequests: config.batch.maxRequests ?? 50,
+        timeout: config.batch.timeout ?? 3,
+        maxBodySize: config.batch.maxBodySize ?? 0,
+      },
+    })
+    log('  ⚙ PocketBase 批量事务已启用')
   }
 
   // 2) oneshot_meta（发布状态记录，供控制台/CLI 读取）
@@ -363,6 +387,7 @@ export async function publish(opts: PublishOptions): Promise<PublishReport> {
     if (spec.options.default !== undefined) authDefaults[f] = spec.options.default
   }
   if (Object.keys(authDefaults).length) {
+    await mkdir(hooksDir, { recursive: true })
     const authEntry = buildAuthDefaultsEntry(authCollectionName, authDefaults)
     const authEntryPath = resolvePath(hooksDir, `${authCollectionName}.defaults.pb.js`)
     await writeFile(authEntryPath, authEntry, 'utf8')

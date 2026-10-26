@@ -62,11 +62,13 @@ const HOOKS_DIR = process.env.TEST_MAIN_HOOKS_DIR
 /** 轮询等待路由达到期望状态码（热重载有 1-2 秒窗口，期间可能连接被拒或仍旧路由） */
 async function waitRouteStatus(urlPath, wantStatus, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs
+  let stable = 0
   for (;;) {
     try {
       const res = await fetch(PB + urlPath, { signal: AbortSignal.timeout(1500) })
-      if (res.status === wantStatus) return true
-    } catch {}
+      stable = res.status === wantStatus ? stable + 1 : 0
+      if (stable >= 3) return true
+    } catch { stable = 0 }
     if (Date.now() > deadline) return false
     await new Promise((r) => setTimeout(r, 250))
   }
@@ -77,6 +79,17 @@ const publishToMainHooks = () => execFileSync(process.execPath, [CLI, 'publish',
     ONESHOT_SUPERUSER_EMAIL: 'admin@example.com', ONESHOT_SUPERUSER_PASSWORD: 'oneshot123' },
   stdio: 'pipe',
 })
+
+async function coldRestartMain() {
+  const request = String(Date.now())
+  writeFileSync(process.env.TEST_RESTART_MAIN, request)
+  const deadline = Date.now() + 20000
+  while (Date.now() < deadline) {
+    if (readFileSync(process.env.TEST_RESTART_ACK, 'utf8') === request) return true
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  return false
+}
 
 // handler 源文件写入 manifest 副本项目（validateConfig 要求 handler 文件存在；套件自清理）
 const handlerFile = join(dirname(path), 'hooks', 'actions.ts')
@@ -93,8 +106,9 @@ withActions.services.push(svcWithAction('./hooks/actions.ts#hello'))
 const addedSvc = await fetch(CTRL + '/api/manifest', { method: 'POST', headers: H, body: JSON.stringify({ config: withActions }) }).then((r) => r.json())
 assert('actions: 新增含 action 的服务并发布', addedSvc.report?.created?.includes('action_notes'), JSON.stringify(addedSvc))
 
-// 控制服务器发布走默认 hooksDir（不为主实例加载）；同步进主实例 hooks 目录，等热重载后路由才真正可用
+// 新增路由依赖 hooks 冷启动加载，不依赖 PB 在 Windows 上不可靠的新文件热重载
 publishToMainHooks()
+if (!(await coldRestartMain())) throw new Error('主实例冷重启超时')
 await waitRouteStatus('/api/oneshot/e2e_actions/hello', 200)
 const hello = await j(PB, 'GET', '/api/oneshot/e2e_actions/hello')
 assert('actions: PB 路由可用且返回 handler 结果', hello.status === 200 && hello.data?.hello === 'world', JSON.stringify(hello.data))
@@ -112,6 +126,7 @@ publishToMainHooks()
 // publish 只清理"上一次快照有、本次没有"的服务的产物（且在发布方 hooksDir 语义下），主实例里的孤儿产物这里手工清
 rmSync(join(HOOKS_DIR, 'e2e_actions.pb.js'), { force: true })
 rmSync(join(HOOKS_DIR, 'e2e_actions.user.pb.js'), { force: true })
+if (!(await coldRestartMain())) throw new Error('主实例冷重启超时')
 await waitRouteStatus('/api/oneshot/e2e_actions/hello', 404)
 const gone = await j(PB, 'GET', '/api/oneshot/e2e_actions/hello')
 assert('actions: 删除服务后路由 404', gone.status === 404, `status=${gone.status}`)

@@ -4,14 +4,19 @@ import { createRequire } from 'node:module'
 import { basename, resolve } from 'node:path'
 import { build } from 'esbuild'
 import { resolveHandler, type ResolvedManifest } from './manifest.js'
+import { SERVICE_ACCOUNT_EMAIL } from './pb-mapping.js'
+import {
+  isJsonObject,
+  sidecarErrorMessage,
+  sidecarErrorStatus,
+  type JsonObject,
+  type SidecarCtx,
+  type SidecarHandler,
+} from './action-runtime.js'
 import type { OneshotConfig } from './schema.js'
 
-/**
- * sidecar：跑在真正 Node 进程里的 action handler。
- * PB 的 JSVM 路由通过 $http.send 把 {auth, token, query, body} 转发到控制服务器的
- * /sidecar/{service}/{action}，这里执行用户 handler 并返回结果。
- * handler 内拿 ctx.pbUrl / ctx.token 可回调 PB API（身份与规则原样生效）。
- */
+export { defineSidecarAction, SidecarActionError, sidecarErrorMessage, sidecarErrorStatus, withSidecarLocks } from './action-runtime.js'
+export type { JsonObject, JsonValue, SidecarCtx, SidecarHandler } from './action-runtime.js'
 
 const require_ = createRequire(import.meta.url)
 
@@ -22,42 +27,27 @@ export function sidecarTokenPath(root: string): string {
 export function getOrCreateSidecarToken(root: string): string {
   const path = sidecarTokenPath(root)
   if (existsSync(path)) {
-    // 自愈：已存在的 token 母本把目录/文件权限强制收敛到 0700/0600（幂等，已正确时为无害系统调用）。
-    // 绝不重生成内容 —— 旧 token 已烘焙进上次发布的 pb_hooks 产物，轮换会让 PB→sidecar 转发断链。
     const dir = resolve(root, '.oneshot')
     chmodSync(dir, 0o700)
     chmodSync(path, 0o600)
     return readFileSync(path, 'utf8').trim()
   }
   const token = randomBytes(24).toString('hex')
-  // token 是服务间共享凭据：目录与文件都只给属主权限
   mkdirSync(resolve(root, '.oneshot'), { recursive: true, mode: 0o700 })
   writeFileSync(path, token, { mode: 0o600 })
   return token
 }
 
-export interface SidecarCtx {
-  service: string
-  action: string
-  auth: { id: string } | null
-  /** 当前用户的 PB auth token（转发自原始请求，规则与身份原样生效） */
-  token: string
-  /** 系统服务账号 token（副本流转/罚款结算等系统级写操作专用；librarian 角色） */
-  systemToken: string
-  pbUrl: string
-  query: Record<string, any>
-  body: Record<string, any>
-}
-
-type SidecarHandler = (ctx: SidecarCtx) => Promise<unknown> | unknown
-
 export interface SidecarRegistry {
   handlers: Map<string, SidecarHandler>
-  /** 参与 sidecar 的 {service, action, method} 清单（发布快照/日志用） */
   entries: { service: string; action: string; method: string; route: string }[]
 }
 
-/** 把所有 runtime: 'sidecar' 的 handler 用 esbuild 打包成独立 CJS 文件并加载（npm 包走 external） */
+function isUnknownObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** 把 sidecar handler 打包成独立 CJS 并加载（npm 包保持 external）。 */
 export async function buildSidecarRegistry(manifest: ResolvedManifest, outDir: string): Promise<SidecarRegistry> {
   const { config } = manifest
   mkdirSync(outDir, { recursive: true })
@@ -80,12 +70,14 @@ export async function buildSidecarRegistry(manifest: ResolvedManifest, outDir: s
         legalComments: 'none',
         logLevel: 'silent',
       })
-      const mod = require_(outfile)
-      const fn = mod[exportName ?? actionName] ?? mod.default
-      if (typeof fn !== 'function') {
+      const loaded: unknown = require_(outfile)
+      if (!isUnknownObject(loaded)) throw new Error(`sidecar handler 模块无效：${svc.name}.${actionName}`)
+      const candidate = loaded[exportName ?? actionName] ?? loaded.default
+      if (typeof candidate !== 'function') {
         throw new Error(`sidecar handler 缺少具名导出：${svc.name}.${actionName} → ${basename(file)}#${exportName ?? actionName}`)
       }
-      handlers.set(`${svc.name}/${actionName}`, fn as SidecarHandler)
+      const fn = candidate as SidecarHandler
+      handlers.set(`${svc.name}/${actionName}`, fn)
       entries.push({
         service: svc.name,
         action: actionName,
@@ -103,7 +95,7 @@ export interface SidecarRequestResult {
   body?: unknown
 }
 
-/** 处理 /sidecar/{service}/{action} 请求；非 sidecar 路径返回 { handled: false } */
+/** 处理 /sidecar/{service}/{action} 请求；非 sidecar 路径返回 { handled: false }。 */
 export async function handleSidecarRequest(
   registry: SidecarRegistry,
   req: import('node:http').IncomingMessage,
@@ -120,7 +112,6 @@ export async function handleSidecarRequest(
   }
 
   const auth = req.headers.authorization ?? ''
-  // 常量时间比较防时序侧信道；先比长度避免 timingSafeEqual 抛异常（长度不等本身已可判定）
   const expected = `Bearer ${opts.token}`
   const authOk = auth.length === expected.length && timingSafeEqual(Buffer.from(auth), Buffer.from(expected))
   if (!authOk) {
@@ -135,8 +126,7 @@ export async function handleSidecarRequest(
     return { handled: true, status: 404 }
   }
 
-  // 请求体上限 1MB（超出 413）；PB 的 $http.send 转发固定带 application/json
-  let body: Record<string, any> = {}
+  let raw: unknown = {}
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of req) {
@@ -154,70 +144,101 @@ export async function handleSidecarRequest(
       return { handled: true, status: 415 }
     }
     try {
-      body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      raw = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
     } catch {
       send(400, { error: 'invalid JSON body' })
       return { handled: true, status: 400 }
     }
   }
+  if (!isJsonObject(raw)) {
+    send(400, { error: 'sidecar payload must be a JSON object' })
+    return { handled: true, status: 400 }
+  }
 
-  const payload = body as { auth?: { id: string } | null; token?: string; query?: Record<string, any>; body?: Record<string, any> }
+  const payloadAuth = isJsonObject(raw.auth) && typeof raw.auth.id === 'string'
+    ? { id: raw.auth.id }
+    : null
+  const token = typeof raw.token === 'string' ? raw.token : ''
+  const query: JsonObject = isJsonObject(raw.query) ? raw.query : {}
+  const body: JsonObject = isJsonObject(raw.body) ? raw.body : {}
+
   try {
     const result = await fn({
       service: parts[1],
       action: parts[2],
-      auth: payload.auth ?? null,
-      token: payload.token ?? '',
+      auth: payloadAuth,
+      token,
       systemToken: opts.systemToken ?? '',
       pbUrl: opts.pbUrl,
-      query: payload.query ?? {},
-      body: (payload.body as Record<string, any>) ?? {},
+      query,
+      body,
     } satisfies SidecarCtx)
     send(200, result === undefined ? {} : result)
     return { handled: true, status: 200 }
-  } catch (err: any) {
-    const status = typeof err?.status === 'number' ? err.status : 500
-    send(status, { error: err?.message ?? String(err) })
+  } catch (error: unknown) {
+    const status = sidecarErrorStatus(error)
+    send(status, { error: sidecarErrorMessage(error) })
     return { handled: true, status }
   }
 }
 
+const SERVICE_EMAIL = SERVICE_ACCOUNT_EMAIL
 
-const SERVICE_EMAIL = 'oneshot-service@system.local'
+interface ServiceAccountAdmin {
+  request<T = unknown>(method: string, path: string, body?: unknown): Promise<T>
+  listRecords(collection: string, query?: string): Promise<{ items?: unknown[]; totalItems?: number }>
+  createRecord(collection: string, body: unknown): Promise<unknown>
+  updateRecord(collection: string, id: string, body: unknown): Promise<unknown>
+}
 
-/** 确保系统服务账号存在并返回长效 impersonate token（sidecar 的系统级操作凭据：
- *  副本状态流转、罚款结算等读者无权直改、但业务动作必须执行的写操作）。
- *  账号 role 由调用方（provisioner）以超管身份设置为 librarian。 */
+function recordId(value: unknown): string | undefined {
+  return isUnknownObject(value) && typeof value.id === 'string' ? value.id : undefined
+}
+
+function tokenValue(value: unknown): string {
+  if (!isUnknownObject(value) || typeof value.token !== 'string' || !value.token) {
+    throw new Error('PocketBase 未返回有效的服务账号 token')
+  }
+  return value.token
+}
+
+/** 确保系统服务账号存在并返回长效 impersonate token。 */
 export async function ensureServiceAccount(
-  pb: { request: (m: string, p: string, b?: unknown) => Promise<any>; listRecords: (c: string, q?: string) => Promise<any>; createRecord: (c: string, b: unknown) => Promise<any>; updateRecord: (c: string, id: string, b: unknown) => Promise<any> },
+  pb: ServiceAccountAdmin,
   authCollection: string,
   root: string,
 ): Promise<string> {
   const exists = await pb.listRecords(authCollection, `?filter=${encodeURIComponent(`email = "${SERVICE_EMAIL}"`)}&perPage=1`)
-  let id: string = exists.items?.[0]?.id
+  let id = recordId(exists.items?.[0])
   if (!id) {
+    const password = cryptoRandom(24)
     const created = await pb.createRecord(authCollection, {
-      email: SERVICE_EMAIL, password: cryptoRandom(24), passwordConfirm: undefined, role: 'librarian', blocked: false,
-    } as any).catch(async () => {
-      // auth collection 注册可能要求 passwordConfirm
-      const pwd = cryptoRandom(24)
-      return pb.createRecord(authCollection, { email: SERVICE_EMAIL, password: pwd, passwordConfirm: pwd, role: 'librarian', blocked: false } as any)
+      email: SERVICE_EMAIL,
+      password,
+      passwordConfirm: password,
+      role: 'librarian',
+      blocked: false,
     })
-    id = created.id
+    id = recordId(created)
+    if (!id) throw new Error('系统服务账号创建后未返回记录 id')
   } else {
     await pb.updateRecord(authCollection, id, { role: 'librarian', blocked: false }).catch(() => {})
   }
   const imp = await pb.request('POST', `/api/collections/${authCollection}/impersonate/${id}`, { duration: 31536000 })
-  const token = imp.token as string
-  writeFileSync(resolve(root, '.oneshot/service-account-token'), token, { mode: 0o600 })
+  const token = tokenValue(imp)
+  mkdirSync(resolve(root, '.oneshot'), { recursive: true, mode: 0o700 })
+  const tokenPath = resolve(root, '.oneshot/service-account-token')
+  writeFileSync(tokenPath, token, { mode: 0o600 })
+  chmodSync(tokenPath, 0o600)
   return token
 }
 
-/** 读取 service account token（控制服务器每次请求时读，热更新） */
 export function readServiceAccountToken(root: string): string {
   try {
     return String(readFileSync(resolve(root, '.oneshot/service-account-token'), 'utf8')).trim()
-  } catch { return '' }
+  } catch {
+    return ''
+  }
 }
 
 function cryptoRandom(n: number): string {
@@ -226,6 +247,6 @@ function cryptoRandom(n: number): string {
 
 export function hasSidecarActions(config: OneshotConfig): boolean {
   return config.services.some((svc) =>
-    Object.values(svc.actions ?? {}).some((a) => a.runtime === 'sidecar'),
+    Object.values(svc.actions ?? {}).some((action) => action.runtime === 'sidecar'),
   )
 }

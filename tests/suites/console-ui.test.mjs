@@ -107,6 +107,7 @@ try {
   // ---------- AC-3 仪表盘 ----------
   step = 'AC-3 仪表盘'
   await page.getByText('发布状态').waitFor({ state: 'visible', timeout: 15000 })
+  await page.getByText('e2e-fixture', { exact: true }).waitFor({ state: 'visible', timeout: 15000 })
   const projectVisible = await page.getByText('e2e-fixture', { exact: true }).isVisible()
   assert('登录: 正确凭据 → 仪表盘出现且项目名为 e2e-fixture', projectVisible)
 

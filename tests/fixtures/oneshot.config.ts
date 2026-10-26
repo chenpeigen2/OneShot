@@ -6,7 +6,15 @@ export default defineConfig({
   name: 'e2e-fixture',
   baseUrl: process.env.ONESHOT_PB_URL ?? 'http://127.0.0.1:8099',
 
-  auth: { collection: 'users', signup: 'public' },
+  auth: {
+    collection: 'users',
+    signup: 'public',
+    fields: {
+      role: s.select(['reader', 'librarian'], { required: true, default: 'reader' }),
+      maxBorrow: s.number({ min: 1, max: 20, onlyInt: true, default: 5 }),
+    },
+    managed: ['role', 'maxBorrow'],
+  },
 
   services: [
     service('tasks', {

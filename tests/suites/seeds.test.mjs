@@ -15,7 +15,7 @@ const env = { ...process.env, ONESHOT_PB_URL: PB, ONESHOT_SUPERUSER_EMAIL: 'admi
 const proj = join(TMP, 'seed-project')
 rmSync(proj, { recursive: true, force: true })
 mkdirSync(join(proj, 'node_modules/@oneshot'), { recursive: true })
-symlinkSync(process.env.TEST_CORE_DIR ? join(process.env.TEST_CORE_DIR) : join(process.cwd(), 'packages/core'), join(proj, 'node_modules/@oneshot/core'))
+symlinkSync(process.env.TEST_CORE_DIR ? join(process.env.TEST_CORE_DIR) : join(process.cwd(), 'packages/core'), join(proj, 'node_modules/@oneshot/core'), process.platform === 'win32' ? 'junction' : 'dir')
 
 const demoUser = await makeUser(PB)
 

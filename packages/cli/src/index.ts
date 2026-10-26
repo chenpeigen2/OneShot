@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, basename, resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { loadManifest } from '@oneshot/core'
 import { publish } from '@oneshot/core'
 import { generateClients } from '@oneshot/core'
@@ -26,6 +27,10 @@ import { ENV_EXAMPLE, INIT_GITIGNORE, renderTemplateReadme } from './templates.j
 import { TEMPLATES, templateNames } from './templates-ts/registry.js'
 
 // ---------- 小工具 ----------
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 function parseArgs(argv: string[]): { _: string[]; flags: Record<string, string | boolean> } {
   const _: string[] = []
@@ -124,8 +129,8 @@ async function doDev(flags: Record<string, string | boolean>): Promise<void> {
       await doPublish(flags)
       // sidecar handler 改动后随发布自动热重载（manifest 变更由 onManifestUpdated 覆盖）
       await ctrl?.rebuildSidecar()
-    } catch (err: any) {
-      process.stderr.write(`❌ ${err?.message ?? err}\n`)
+    } catch (err: unknown) {
+      process.stderr.write(`❌ ${errorMessage(err)}\n`)
     }
   }
   await run()
@@ -135,16 +140,19 @@ async function doDev(flags: Record<string, string | boolean>): Promise<void> {
     ctrl = await startControl(flags)
     process.stderr.write(`🖥️  控制台/sidecar: ${ctrl.url}\n`)
     for (const r of ctrl.sidecarRoutes) process.stderr.write(`⚙️  sidecar: ${r}\n`)
-  } catch (err: any) {
-    process.stderr.write(`⚠️ 控制服务器未启动：${err?.message ?? err}\n`)
+  } catch (err: unknown) {
+    process.stderr.write(`⚠️ 控制服务器未启动：${errorMessage(err)}\n`)
   }
 
   if (flags.watch === true) {
-    process.stderr.write('👀 watch 模式：修改 oneshot.config.ts / hooks/ 后自动重新发布（Ctrl+C 退出）\n')
+    process.stderr.write('👀 watch 模式：修改 oneshot.config.ts / src/ / hooks/ 后自动重新发布（Ctrl+C 退出）\n')
     const root = dirname(configPath)
     const watchers = [watch(configPath, { persistent: true })]
-    const hooksPath = join(root, 'hooks')
-    if (existsSync(hooksPath)) watchers.push(watch(hooksPath, { persistent: true }))
+    // src 是推荐的项目源码目录；hooks 保留兼容。递归监听共享模块与嵌套 features。
+    for (const directory of ['src', 'hooks']) {
+      const sourcePath = join(root, directory)
+      if (existsSync(sourcePath)) watchers.push(watch(sourcePath, { persistent: true, recursive: true }))
+    }
     let timer: NodeJS.Timeout | null = null
     const schedule = () => {
       if (timer) clearTimeout(timer)
@@ -252,7 +260,7 @@ async function startControl(flags: Record<string, string | boolean>): Promise<{
     : null
 
   const api = manifestApi
-    ? async (req: any, res: any): Promise<boolean> => {
+    ? async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
         if (await manifestApi(req, res)) return true
         if (registry && (await handleSidecarRequest(registry, req, res, { token: sidecarToken, pbUrl, systemToken: readServiceAccountToken(currentRoot()) })).handled) return true
         return false
@@ -361,8 +369,8 @@ async function main(): Promise<void> {
         let configLookupError: string | undefined
         try {
           configPath = findConfig(flags)
-        } catch (err: any) {
-          configLookupError = err?.message ?? String(err)
+        } catch (err: unknown) {
+          configLookupError = errorMessage(err)
         }
         const report = await runDoctor({
           cwd: process.cwd(),
@@ -393,8 +401,8 @@ async function main(): Promise<void> {
       default:
         throw new Error(`未知命令：${cmd}\n${HELP}`)
     }
-  } catch (err: any) {
-    process.stderr.write(`❌ ${err?.message ?? err}\n`)
+  } catch (err: unknown) {
+    process.stderr.write(`❌ ${errorMessage(err)}\n`)
     process.exitCode = 1
   }
 }

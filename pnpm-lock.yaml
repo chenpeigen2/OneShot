@@ -27,6 +27,12 @@ importers:
         specifier: ^5.6.0
         version: 5.6.2
 
+  examples/library:
+    dependencies:
+      '@oneshot/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   packages/cli:
     dependencies:
       '@oneshot/core':

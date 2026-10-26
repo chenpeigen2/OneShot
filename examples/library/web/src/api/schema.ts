@@ -4,6 +4,8 @@ export interface BaseRecord {
   id: string
   created: string
   updated: string
+  collectionId: string
+  collectionName: string
 }
 
 export interface UsersRecord extends BaseRecord {
@@ -12,14 +14,21 @@ export interface UsersRecord extends BaseRecord {
   verified?: boolean
   name?: string
   avatar?: string
+  phone: string
+  role: "reader" | "librarian"
+  blocked: boolean
+  maxBorrow: number
+  fines: number
 }
+
+export type UsersRegisterInput = Omit<Partial<UsersRecord>, "role" | "blocked" | "maxBorrow" | "fines"> & { email: string; password: string; passwordConfirm: string }
 
 export interface BooksRecord extends BaseRecord {
   title: string
   isbn: string
   author: string
   publisher: string
-  category: string
+  category: "文学" | "技术" | "历史" | "儿童" | "其他"
   year: number
   summary: string
 }
@@ -27,7 +36,7 @@ export interface BooksRecord extends BaseRecord {
 export interface CopiesRecord extends BaseRecord {
   book: string
   barcode: string
-  status: string
+  status: "in_shelf" | "on_loan" | "lost" | "repair" | "withdrawn"
   location: string
 }
 
@@ -43,5 +52,5 @@ export interface BorrowingsRecord extends BaseRecord {
 export interface ReservationsRecord extends BaseRecord {
   book: string
   member: string
-  status: string
+  status: "active" | "fulfilled" | "cancelled"
 }

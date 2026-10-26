@@ -45,6 +45,7 @@ export async function superuserLogin(base = PB, identity = SU_EMAIL, password = 
 /** 注册并登录一个普通用户，返回 { id, email, token } */
 export async function makeUser(base = PB) {
   const email = `u${Date.now()}${Math.floor(Math.random() * 1000)}@test.dev`
+  // 只提交账号信息：role/maxBorrow 由服务端按默认值落库（公开注册不应要求客户端懂内部字段）
   const reg = await j(base, 'POST', '/api/collections/users/records', {
     email, password: '1234567890', passwordConfirm: '1234567890',
   })

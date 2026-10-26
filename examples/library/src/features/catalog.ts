@@ -1,7 +1,19 @@
-// library 的 JSVM hooks 与统计 action（oneshot publish 编译进 PB JSVM）
+import type { JsvmActionContext, JsvmHookContext } from '../shared/jsvm'
 
-// 目录卫生：书名 trim、ISBN 去横线空格、条码大写（仅 books/copies）
-export function beforeValidate(ctx: any) {
+declare const BadRequestError: new (message: string) => Error
+
+export interface LibraryStats {
+  titles: number
+  totalCopies: number
+  onShelf: number
+  onLoan: number
+  overdue: number
+  activeReservations: number
+  myOnLoan: number
+}
+
+/** 目录卫生：书名 trim、ISBN 去横线空格、条码大写（仅 books/copies）。 */
+export function beforeValidate(ctx: JsvmHookContext): void {
   if (ctx.coll === 'books') {
     const title = String(ctx.record.get('title') ?? '').trim()
     if (!title) throw new BadRequestError('title 不能为空')
@@ -17,8 +29,8 @@ export function beforeValidate(ctx: any) {
   }
 }
 
-// GET /api/oneshot/library/stats —— 馆藏/流通/预约/罚款统计（只读）
-export function stats(ctx: any) {
+/** GET /api/oneshot/library/stats：馆藏、流通、预约和当前读者统计。 */
+export function stats(ctx: JsvmActionContext): LibraryStats {
   const books = ctx.app.findRecordsByFilter('books', 'id != ""', '', -1, 0)
   const copies = ctx.app.findRecordsByFilter('copies', 'id != ""', '', -1, 0)
   const onShelf = ctx.app.findRecordsByFilter('copies', 'status = "in_shelf"', '', -1, 0)
@@ -26,7 +38,9 @@ export function stats(ctx: any) {
   const active = ctx.app.findRecordsByFilter('borrowings', 'returnedAt = ""', '', -1, 0)
   const overdue = ctx.app.findRecordsByFilter('borrowings', `returnedAt = "" && due < "${now}"`, '', -1, 0)
   const reservations = ctx.app.findRecordsByFilter('reservations', 'status = "active"', '', -1, 0)
-  const mineActive = ctx.auth ? ctx.app.findRecordsByFilter('borrowings', `returnedAt = "" && member = "${ctx.auth.id}"`, '', -1, 0).length : 0
+  const mineActive = ctx.auth
+    ? ctx.app.findRecordsByFilter('borrowings', `returnedAt = "" && member = "${ctx.auth.id}"`, '', -1, 0).length
+    : 0
   return {
     titles: books.length,
     totalCopies: copies.length,

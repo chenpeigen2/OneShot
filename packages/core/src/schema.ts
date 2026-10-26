@@ -81,10 +81,10 @@ export const s = {
  * - 'public'        所有人（空 filter）
  * - 'authenticated' 已登录（@request.auth.id != ""）
  * - 'owner'         记录属主：需要一个指向 auth collection 的 relation 字段（默认找名为 owner 的）
- * - 'superuser'     仅超管（null，PB 默认）
+ * - 'superuser' / null 仅超管（null 与 'superuser' 等价，PB 默认）
  * - 其他字符串       原样透传为 PB filter 表达式
  */
-export type RuleSpec = 'public' | 'authenticated' | 'owner' | 'superuser' | 'admin' | (string & {})
+export type RuleSpec = 'public' | 'authenticated' | 'owner' | 'superuser' | 'admin' | (string & {}) | null
 
 export interface RulesSpec {
   list?: RuleSpec
@@ -172,12 +172,26 @@ export interface AuthSpec {
    */
   fields?: Record<string, FieldSpec>
   /**
+   * 服务端托管字段（如 role / blocked / fines / maxBorrow）。
+   *
+   * 这些字段的值由服务端说了算：
+   * - 注册：客户端可以**省略**（服务端注入默认值），也可以显式提交默认值；
+   *   提交其他值一律拒绝（不能靠注册提权）。
+   * - 本人更新：只能省略或保持与库中现值一致（不能自改欠款/上限/角色）。
+   *
+   * 声明后框架自动生成对应的 createRule / updateRule，无需手写 PB filter。
+   * 显式设置 createRule / updateRule 会覆盖自动生成的结果。
+   */
+  managed?: string[]
+  /**
    * 自定义访问规则（原生 PB filter）。默认安全值：仅本人可见/可改。
    * 例（管理员可见全部、可管理他人）：listRule/viewRule 设为
    * 'id = @request.auth.id || @request.auth.role = "librarian"'
    */
   listRule?: string
   viewRule?: string
+  /** 注册/创建规则；设置后覆盖 signup 推导出的 createRule */
+  createRule?: string
   updateRule?: string
 }
 
@@ -198,6 +212,8 @@ export interface OneshotConfig {
   name: string
   /** PocketBase 实例地址，可被 ONESHOT_PB_URL 覆盖 */
   baseUrl?: string
+  /** 需要多记录原子写入时显式开启 PocketBase 批量事务 */
+  batch?: { maxRequests?: number; timeout?: number; maxBodySize?: number }
   auth?: AuthSpec
   services: ServiceEntry[]
   clients?: ClientsSpec

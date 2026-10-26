@@ -85,7 +85,15 @@ export function buildDartClient(config: OneshotConfig, outDir: string): DartGenR
   models.push(`  final bool verified;`)
   models.push(`  final String? name;`)
   models.push(`  final String? avatar;`)
-  models.push(`  const ${pascal(authCollection)}Record({required this.id, this.created, this.updated, this.email, this.verified = false, this.name, this.avatar});`)
+  const authFields = Object.entries(config.auth?.fields ?? {}).filter(([name]) => name !== 'name' && name !== 'avatar')
+  for (const [fieldName, spec] of authFields) models.push(`  final ${dartType(spec)} ${fieldName};`)
+  models.push(`  const ${pascal(authCollection)}Record({`)
+  models.push('    required this.id, this.created, this.updated, this.email, this.verified = false, this.name, this.avatar,')
+  for (const [fieldName, spec] of authFields) {
+    const nullable = dartType(spec).endsWith('?') || spec.kind === 'json'
+    models.push(nullable ? `    this.${fieldName},` : `    required this.${fieldName},`)
+  }
+  models.push('  });')
   models.push(`  factory ${pascal(authCollection)}Record.fromJson(Map<String, dynamic> json) => ${pascal(authCollection)}Record(`)
   models.push(`    id: json['id'] as String,`)
   models.push(`    created: json['created'] == null ? null : DateTime.tryParse(json['created'] as String),`)
@@ -94,6 +102,7 @@ export function buildDartClient(config: OneshotConfig, outDir: string): DartGenR
   models.push(`    verified: (json['verified'] as bool?) ?? false,`)
   models.push(`    name: json['name'] as String?,`)
   models.push(`    avatar: json['avatar'] as String?,`)
+  for (const [fieldName, spec] of authFields) models.push(`    ${fieldName}: ${dartFromJson(spec, fieldName)},`)
   models.push(`  );`)
   models.push(`}\n`)
   modelClasses.push(pascal(authCollection))
